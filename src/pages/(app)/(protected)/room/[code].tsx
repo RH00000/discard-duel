@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth, usePresenceRoom, useQuery, useUserLookup, type RecordData } from 'deepspace'
 import { Badge, Button, cn, useToast } from '@/components/ui'
+import { RemoveRoomButton } from '@/components/game/RemoveRoomButton'
 import { Tile } from '@/components/game/Tile'
 import { WhyPanel } from '@/components/game/WhyPanel'
 import { callAction } from '@/lib/call-action'
@@ -66,6 +67,7 @@ function RoomView({ room }: { room: RecordData<Room> }) {
   const { userId } = useAuth()
   const { getName } = useUserLookup()
   const { error, success } = useToast()
+  const navigate = useNavigate()
   const name = (id: string) => (id === userId ? 'You' : getName(id) ?? 'Player')
   // Keyed by the random record id, not the short code: presence sockets accept any scope string.
   const { peers } = usePresenceRoom(`room:${room.recordId}`)
@@ -115,6 +117,7 @@ function RoomView({ room }: { room: RecordData<Room> }) {
             <Button variant="secondary" size="sm" data-testid="copy-invite" onClick={() => void copyInvite()}>
               Copy invite link
             </Button>
+            <RemoveRoomButton room={room} userId={userId} onDone={() => navigate('/play')} />
           </div>
         </div>
         {isHost && current?.data.status !== 'picking' && (

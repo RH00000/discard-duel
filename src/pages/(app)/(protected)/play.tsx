@@ -1,25 +1,14 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth, useQuery } from 'deepspace'
-import {
-  Button,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  Input,
-  Label,
-  useToast,
-} from '@/components/ui'
+import { Button, Input, Label, useToast } from '@/components/ui'
+import { RemoveRoomButton } from '@/components/game/RemoveRoomButton'
 import { callAction } from '@/lib/call-action'
-import type { RecordData } from 'deepspace'
 import type { Room } from '@/schemas/game-schema'
 
 export default function PlayPage() {
   const navigate = useNavigate()
-  const { error, success } = useToast()
+  const { error } = useToast()
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState<'create' | 'join' | null>(null)
   const { userId } = useAuth()
@@ -28,24 +17,6 @@ export default function PlayPage() {
   const myRooms = rooms
     .filter((r) => userId && r.data.playerIds.includes(userId))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  const [removing, setRemoving] = useState<RecordData<Room> | null>(null)
-  const [removeBusy, setRemoveBusy] = useState(false)
-  const removingIsHost = removing?.data.hostId === userId
-
-  async function confirmRemove() {
-    if (!removing) return
-    setRemoveBusy(true)
-    try {
-      await callAction(removingIsHost ? 'deleteRoom' : 'leaveRoom', { code: removing.data.code })
-      success(removingIsHost ? `Deleted room ${removing.data.code}` : `Left room ${removing.data.code}`)
-      setRemoving(null)
-    } catch (e) {
-      error(removingIsHost ? 'Could not delete room' : 'Could not leave room', (e as Error).message)
-    } finally {
-      setRemoveBusy(false)
-    }
-  }
-
   async function run(kind: 'create' | 'join', fn: () => Promise<{ code: string }>) {
     setBusy(kind)
     try {
@@ -113,46 +84,12 @@ export default function PlayPage() {
                     {r.data.hostId === userId && ' · host'}
                   </span>
                 </Link>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  data-testid={`remove-room-${r.data.code}`}
-                  onClick={() => setRemoving(r)}
-                >
-                  {r.data.hostId === userId ? 'Delete' : 'Leave'}
-                </Button>
+                <RemoveRoomButton room={r} userId={userId} />
               </li>
             ))}
           </ul>
         </section>
       )}
-      <Dialog open={removing !== null} onOpenChange={(open) => !open && !removeBusy && setRemoving(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {removingIsHost ? 'Delete' : 'Leave'} room {removing?.data.code}?
-            </DialogTitle>
-            <DialogDescription>
-              {removingIsHost
-                ? 'This removes the room, its rounds and scores for every player. It cannot be undone.'
-                : 'You will drop out of the room and its scoreboard. You can rejoin with the code while there is a free seat.'}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setRemoving(null)} disabled={removeBusy}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              data-testid="confirm-remove-room"
-              loading={removeBusy}
-              onClick={() => void confirmRemove()}
-            >
-              {removingIsHost ? 'Delete room' : 'Leave room'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

@@ -292,10 +292,11 @@ test('invite link, leaving a room, and the host deleting it for everyone', async
   await expect(a.page.getByText('Invite link copied')).toBeVisible()
   expect(await a.page.evaluate(() => navigator.clipboard.readText())).toBe(new URL(`/room/${code}`, a.page.url()).href)
 
-  // B leaves from the room list: A's player list drops to 1 and B no longer lists the room.
-  await b.page.goto('/play')
+  // B leaves from inside the room: lands on /play without the room listed, and A's player list drops to 1.
+  await expect(b.page.getByTestId(`remove-room-${code}`)).toHaveText('Leave room')
   await b.page.getByTestId(`remove-room-${code}`).click()
   await b.page.getByTestId('confirm-remove-room').click()
+  await expect(b.page).toHaveURL(/\/play$/, { timeout: 15_000 })
   await expect(b.page.getByTestId(`remove-room-${code}`)).toHaveCount(0, { timeout: 15_000 })
   await expect(a.page.getByTestId('players').locator('li')).toHaveCount(1, { timeout: 15_000 })
 
@@ -304,7 +305,7 @@ test('invite link, leaving a room, and the host deleting it for everyone', async
   await b.page.getByTestId('join-room').click()
   await expect(b.page.getByTestId('room-code')).toHaveText(code, { timeout: 15_000 })
   await a.page.goto('/play')
-  await expect(a.page.getByTestId(`remove-room-${code}`)).toHaveText('Delete')
+  await expect(a.page.getByTestId(`remove-room-${code}`)).toHaveText('Delete room')
   await a.page.getByTestId(`remove-room-${code}`).click()
   await a.page.getByTestId('confirm-remove-room').click()
   await expect(a.page.getByTestId(`remove-room-${code}`)).toHaveCount(0, { timeout: 15_000 })
