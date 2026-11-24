@@ -324,3 +324,23 @@ User hand-checked check 7: the join prompt works by link, and a fifth account is
   - the README H1
 - **Left unchanged on purpose:** the repo, package name, the wrangler `name`/app slug/URL, and the `APP_NAME` var in wrangler.toml. That var is deploy config and is only read by the scaffold's AI chat system prompt.
 - **Tests:** vitest 19/19, e2e 28/28.
+
+## 2026-11-24: polish pass (no game logic, data model or permission changes)
+- **Bug 1: "(left)" label.** In FW3XS round 2, Ricky Vicks was in the results but not in the player pills. The user confirmed they left mid-round: a round keeps the players it started with, while the pills show the room's current players. No investigation, as requested.
+  - **Fix:** the results table adds a muted "(left)" after any player who is no longer in the room (`RevealView` gets the room's `playerIds`).
+- **Bug 2: tile names.** Users saw "1z"/"2p"-style names. Added `src/lib/tile-label.ts` with `tileLabel` ("2 pin", "East") plus a unit test, and used it everywhere players read a tile name:
+  - Lock-in button and "Locked in:" text
+  - the "Best discards" line
+  - tile `aria-label`s
+  - the "Why?" input, so new explanations name tiles the same way; the definitions and the test were updated, and explanations already saved keep their old wording
+  - `data-tile` keeps the compact `tileName` form that tests rely on
+- **Room page styling:**
+  - tiles: off-white face, rounded, darker 5px bottom edge, soft shadow
+  - the selected tile lifts 6px with the primary ring
+  - the hand sits on a dark green felt panel (emerald-900 plus a faint radial highlight; no images)
+  - on reveal, best discards get a gold (amber-400) ring and the others are no longer dimmed
+  - everything else stays on the DeepSpace theme; no new fonts
+- **Tests:**
+  - New e2e test: three players; C locks in, then leaves; A and B lock in. C's row shows "(left)" and B's doesn't; the "Best discards" text has no `1z`-style codes. Set `REVEAL_SCREENSHOT=<path>` to save a screenshot.
+  - The full-round test now expects the display name in "Locked in:".
+  - Results: vitest 20/20, e2e 29/29.

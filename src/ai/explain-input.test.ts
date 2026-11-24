@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { discardOptions, hand, tileName } from '../lib/shanten'
+import { discardOptions, hand } from '../lib/shanten'
+import { tileLabel } from '../lib/tile-label'
 import { buildExplainInput, EXPLAIN_SYSTEM_PROMPT } from './explain-input'
 
 const tiles = hand('234567m234p55669s').flatMap((n, t) => Array<number>(n).fill(t))
@@ -14,18 +15,18 @@ describe('buildExplainInput', () => {
     const engine = discardOptions(hand('234567m234p55669s'))
     expect(input.discards).toHaveLength(engine.length)
     for (const o of engine) {
-      const d = input.discards.find((x) => x.discard === tileName(o.discard))!
+      const d = input.discards.find((x) => x.discard === tileLabel(o.discard))!
       expect(d.shantenAfter).toBe(o.shanten)
       expect(d.ukeireTotal).toBe(o.ukeireTotal)
-      expect(d.ukeire).toEqual(o.ukeire.map((u) => ({ tile: tileName(u.tile), unseen: u.unseen })))
+      expect(d.ukeire).toEqual(o.ukeire.map((u) => ({ tile: tileLabel(u.tile), unseen: u.unseen })))
     }
-    expect(input.discards[0]).toMatchObject({ discard: '9s', shantenAfter: 0, ukeireTotal: 4, optimal: true })
-    expect(input.discards.filter((d) => d.optimal).map((d) => d.discard)).toEqual(['9s'])
+    expect(input.discards[0]).toMatchObject({ discard: '9 sou', shantenAfter: 0, ukeireTotal: 4, optimal: true })
+    expect(input.discards.filter((d) => d.optimal).map((d) => d.discard)).toEqual(['9 sou'])
     expect(input.hand).toHaveLength(14)
   })
 
   it('sends picks without user ids', () => {
-    expect(input.playerPicks).toEqual([{ pick: '9s', points: 4 }])
+    expect(input.playerPicks).toEqual([{ pick: '9 sou', points: 4 }])
     expect(JSON.stringify(input)).not.toContain('secret-user-id')
   })
 

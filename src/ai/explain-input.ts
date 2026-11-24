@@ -1,5 +1,6 @@
 /** Pure parts of the "Why?" feature: the system prompt and the structured data the model sees. */
-import { bestDiscards, discardOptions, tileName } from '../lib/shanten'
+import { bestDiscards, discardOptions } from '../lib/shanten'
+import { tileLabel } from '../lib/tile-label'
 import type { Round } from '../schemas/game-schema'
 import { toCounts } from '../actions/index.js'
 
@@ -26,20 +27,20 @@ export function buildExplainInput(round: Pick<Round, 'hand' | 'results'>) {
       unseen: 'copies of that tile not in this 14-tile hand (4 minus copies held)',
       ranking: 'optimal = lowest shanten after discarding, then most total unseen ukeire',
       points: 'this game scores 3 for an optimal discard, 1 if shanten matches the optimum but ukeire is lower, 0 otherwise, +1 to the fastest optimal pick',
-      tileNames: '1m-9m man, 1p-9p pin, 1s-9s sou, 1z-7z honors (East, South, West, North, White, Green, Red)',
+      tileNames: '"1 man"-"9 man", "1 pin"-"9 pin", "1 sou"-"9 sou", and the honors East, South, West, North, White, Green, Red',
     },
-    hand: round.hand.map(tileName),
+    hand: round.hand.map(tileLabel),
     discards: options
       .map((o) => ({
-        discard: tileName(o.discard),
+        discard: tileLabel(o.discard),
         shantenAfter: o.shanten,
-        ukeire: o.ukeire.map((u) => ({ tile: tileName(u.tile), unseen: u.unseen })),
+        ukeire: o.ukeire.map((u) => ({ tile: tileLabel(u.tile), unseen: u.unseen })),
         ukeireTotal: o.ukeireTotal,
         optimal: best.has(o.discard),
       }))
       .sort((a, b) => a.shantenAfter - b.shantenAfter || b.ukeireTotal - a.ukeireTotal),
     playerPicks: (round.results?.players ?? []).map((p) => ({
-      pick: p.tile === null ? null : tileName(p.tile),
+      pick: p.tile === null ? null : tileLabel(p.tile),
       points: p.points,
     })),
   }

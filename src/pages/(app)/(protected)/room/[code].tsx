@@ -7,6 +7,7 @@ import { Tile } from '@/components/game/Tile'
 import { WhyPanel } from '@/components/game/WhyPanel'
 import { callAction } from '@/lib/call-action'
 import { tileName } from '@/lib/shanten'
+import { tileLabel } from '@/lib/tile-label'
 import type { Lock, Pick, Room, Round } from '@/schemas/game-schema'
 
 export default function RoomPage() {
@@ -150,7 +151,7 @@ function RoomView({ room }: { room: RecordData<Room> }) {
         (current.data.status === 'picking' ? (
           <PickingView key={current.recordId} round={current} userId={userId!} name={name} />
         ) : (
-          <RevealView round={current} name={name} />
+          <RevealView round={current} name={name} roomPlayerIds={room.data.playerIds} />
         ))}
       {current && <PickOwnersMarker roundId={current.recordId} />}
     </div>
@@ -207,7 +208,8 @@ function PickingView({ round, userId, name }: { round: RecordData<Round>; userId
           {remaining}s
         </span>
       </div>
-      <div className="grid grid-cols-[repeat(14,minmax(0,1fr))] gap-0.5 sm:flex sm:gap-1.5" data-testid="hand">
+      <div className="rounded-xl bg-emerald-900 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.08),transparent_70%)] p-2 pt-3 shadow-inner sm:p-4">
+        <div className="grid grid-cols-[repeat(14,minmax(0,1fr))] gap-0.5 sm:flex sm:gap-1.5" data-testid="hand">
         {round.data.hand.map((t, i) => (
           <Tile
             key={i}
@@ -216,15 +218,16 @@ function PickingView({ round, userId, name }: { round: RecordData<Round>; userId
             onClick={inRound && !locked ? () => setSelected(t) : undefined}
           />
         ))}
+        </div>
       </div>
       <div className="flex items-center gap-4">
         {locked ? (
           <p data-testid="my-pick">
-            Locked in: <span className="font-semibold">{tileName(myPick.data.tile)}</span>
+            Locked in: <span className="font-semibold">{tileLabel(myPick.data.tile)}</span>
           </p>
         ) : inRound ? (
           <Button data-testid="lock-in" onClick={lock} loading={locking} disabled={selected === null || remaining === 0}>
-            {selected === null ? 'Select a tile' : `Lock in ${tileName(selected)}`}
+            {selected === null ? 'Select a tile' : `Lock in ${tileLabel(selected)}`}
           </Button>
         ) : (
           <p className="text-sm text-muted-foreground">You joined mid-round. You'll play from the next one.</p>
@@ -244,7 +247,15 @@ function PickingView({ round, userId, name }: { round: RecordData<Round>; userId
   )
 }
 
-function RevealView({ round, name }: { round: RecordData<Round>; name: (id: string) => string }) {
+function RevealView({
+  round,
+  name,
+  roomPlayerIds,
+}: {
+  round: RecordData<Round>
+  name: (id: string) => string
+  roomPlayerIds: string[]
+}) {
   const results = round.data.results
   if (!results) return null
   const bestTiles = new Set(results.best.map((b) => b.discard))
@@ -252,12 +263,14 @@ function RevealView({ round, name }: { round: RecordData<Round>; name: (id: stri
   return (
     <section className="flex flex-col gap-6" aria-label={`Round ${round.data.number} results`} data-testid="reveal">
       <h2 className="text-lg font-semibold">Round {round.data.number}: results</h2>
-      <div className="grid grid-cols-[repeat(14,minmax(0,1fr))] gap-0.5 sm:flex sm:gap-1.5">
-        {round.data.hand.map((t, i) => <Tile key={i} tile={t} dim={!bestTiles.has(t)} />)}
+      <div className="rounded-xl bg-emerald-900 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.08),transparent_70%)] p-2 pt-3 shadow-inner sm:p-4">
+        <div className="grid grid-cols-[repeat(14,minmax(0,1fr))] gap-0.5 sm:flex sm:gap-1.5">
+          {round.data.hand.map((t, i) => <Tile key={i} tile={t} best={bestTiles.has(t)} />)}
+        </div>
       </div>
       <p className="text-sm" data-testid="best">
         Best discard{results.best.length > 1 ? 's' : ''}:{' '}
-        <span className="font-semibold">{results.best.map((o) => tileName(o.discard)).join(', ')}</span>,
+        <span className="font-semibold">{results.best.map((o) => tileLabel(o.discard)).join(', ')}</span>,
         reaching {b.shanten === 0 ? 'tenpai' : `${b.shanten}-shanten`} with {b.ukeireTotal} tiles that improve it.
       </p>
       <table className="w-full text-left text-sm">
@@ -267,7 +280,10 @@ function RevealView({ round, name }: { round: RecordData<Round>; name: (id: stri
         <tbody>
           {results.players.map((p) => (
             <tr key={p.userId} className="border-t" data-testid={`result-${p.userId}`} data-tile={p.tile === null ? '' : tileName(p.tile)}>
-              <td className="py-2">{name(p.userId)}</td>
+              <td className="py-2">
+                {name(p.userId)}
+                {!roomPlayerIds.includes(p.userId) && <span className="text-muted-foreground"> (left)</span>}
+              </td>
               <td>{p.tile === null ? <span className="text-muted-foreground">no pick</span> : <Tile tile={p.tile} size="sm" />}</td>
               <td>{p.shanten ?? '–'}</td>
               <td>{p.ukeireTotal ?? '–'}</td>

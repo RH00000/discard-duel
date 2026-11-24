@@ -204,7 +204,7 @@ test('full 2-player round: picks hidden until reveal, then visible and scored', 
   const aTile = (await aTileBtn.getAttribute('data-tile'))!
   await aTileBtn.click()
   await a.page.getByTestId('lock-in').click()
-  await expect(a.page.getByTestId('my-pick')).toContainText(aTile)
+  await expect(a.page.getByTestId('my-pick')).toContainText((await aTileBtn.getAttribute('aria-label'))!)
 
   // B sees THAT A locked in, but not WHAT: no pick row of A's ever reached B's socket.
   await expect(b.page.getByTestId(`lock-${a.userId}`)).toHaveAttribute('data-locked', 'true')
@@ -463,4 +463,33 @@ test('lock-in racing the deadline reveal: success always means the pick was scor
   // Refused either mid-write ("Time is up") or before it started, if a reveal landed first.
   if (!lock.success) expect(['Time is up', 'Round already revealed']).toContain(lock.error)
   console.log(`deadline race outcome: lockIn ${lock.success ? 'counted' : `refused (${lock.error})`}`)
+})
+
+test('a player who left mid-round is labelled "(left)" in the results table', async ({ users }) => {
+  test.setTimeout(90_000)
+  const [a, b, c] = await users(3)
+  await openAll([a, b, c])
+  const code = (await act(a.page, 'createRoom')).data!.code as string
+  for (const u of [b, c]) expect((await act(u.page, 'joinRoom', { code })).success).toBe(true)
+  const roundId = (await act(a.page, 'startRound', { code })).data!.roundId as string
+  await a.page.setViewportSize({ width: 1100, height: 900 })
+  await a.page.goto(`/room/${code}`)
+  const hand = a.page.getByTestId('hand').locator('button')
+  await expect(hand).toHaveCount(14, { timeout: 15_000 })
+  const tiles = await hand.evaluateAll((els) => els.map((el) => el.getAttribute('data-tile')!))
+
+  // C locks in, then leaves mid-round; A and B lock in, which reveals the round.
+  expect((await act(c.page, 'lockIn', { roundId, tile: tileIndex(tiles[0]) })).success).toBe(true)
+  expect((await act(c.page, 'leaveRoom', { code })).success).toBe(true)
+  await expect(a.page.getByTestId('players').locator('li')).toHaveCount(2, { timeout: 15_000 })
+  await hand.nth(13).click()
+  await a.page.getByTestId('lock-in').click()
+  expect((await act(b.page, 'lockIn', { roundId, tile: tileIndex(tiles[6]) })).success).toBe(true)
+
+  const reveal = a.page.getByTestId('reveal')
+  await expect(reveal).toBeVisible({ timeout: 15_000 })
+  await expect(reveal.getByTestId(`result-${c.userId}`)).toContainText('(left)')
+  await expect(reveal.getByTestId(`result-${b.userId}`)).not.toContainText('(left)')
+  await expect(reveal.getByTestId('best')).not.toContainText(/\d[mpsz]\b/) // display names, not 1z/2p codes
+  if (process.env.REVEAL_SCREENSHOT) await a.page.screenshot({ path: process.env.REVEAL_SCREENSHOT, fullPage: true })
 })
