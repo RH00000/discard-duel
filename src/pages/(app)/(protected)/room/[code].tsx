@@ -65,7 +65,7 @@ function useNow(active: boolean) {
 function RoomView({ room }: { room: RecordData<Room> }) {
   const { userId } = useAuth()
   const { getName } = useUserLookup()
-  const { error } = useToast()
+  const { error, success } = useToast()
   const name = (id: string) => (id === userId ? 'You' : getName(id) ?? 'Player')
   // Keyed by the random record id, not the short code: presence sockets accept any scope string.
   const { peers } = usePresenceRoom(`room:${room.recordId}`)
@@ -95,12 +95,27 @@ function RoomView({ room }: { room: RecordData<Room> }) {
     }
   }
 
+  async function copyInvite() {
+    const link = `${window.location.origin}/room/${room.data.code}`
+    try {
+      await navigator.clipboard.writeText(link)
+      success('Invite link copied', link)
+    } catch {
+      error('Could not copy', `Share this link: ${link}`)
+    }
+  }
+
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8 px-6 py-10">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Room code</p>
-          <p className="font-mono text-3xl font-semibold tracking-widest" data-testid="room-code">{room.data.code}</p>
+          <div className="flex items-center gap-3">
+            <p className="font-mono text-3xl font-semibold tracking-widest" data-testid="room-code">{room.data.code}</p>
+            <Button variant="secondary" size="sm" data-testid="copy-invite" onClick={() => void copyInvite()}>
+              Copy invite link
+            </Button>
+          </div>
         </div>
         {isHost && current?.data.status !== 'picking' && (
           <Button data-testid="start-round" onClick={start} loading={starting} disabled={room.data.playerIds.length < 2}>

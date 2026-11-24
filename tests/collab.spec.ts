@@ -280,6 +280,41 @@ test('a player who leaves for /play can get back to the room from "Your rooms", 
   expect(right).toBeLessThanOrEqual(375)
 })
 
+test('invite link, leaving a room, and the host deleting it for everyone', async ({ users }) => {
+  test.setTimeout(90_000)
+  const { a, b } = await createAndJoin(users)
+  const code = a.page.url().split('/').pop()!
+  const roomId = (await readRecords(b.page, { collection: 'rooms', where: { code } }))[0].recordId
+
+  // Copy invite link puts the room URL on the clipboard.
+  await a.page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await a.page.getByTestId('copy-invite').click()
+  await expect(a.page.getByText('Invite link copied')).toBeVisible()
+  expect(await a.page.evaluate(() => navigator.clipboard.readText())).toBe(new URL(`/room/${code}`, a.page.url()).href)
+
+  // B leaves from the room list: A's player list drops to 1 and B no longer lists the room.
+  await b.page.goto('/play')
+  await b.page.getByTestId(`remove-room-${code}`).click()
+  await b.page.getByTestId('confirm-remove-room').click()
+  await expect(b.page.getByTestId(`remove-room-${code}`)).toHaveCount(0, { timeout: 15_000 })
+  await expect(a.page.getByTestId('players').locator('li')).toHaveCount(1, { timeout: 15_000 })
+
+  // B rejoins via the link, then the host deletes the room: it and its rounds are gone for both.
+  await b.page.goto(`/room/${code}`)
+  await b.page.getByTestId('join-room').click()
+  await expect(b.page.getByTestId('room-code')).toHaveText(code, { timeout: 15_000 })
+  await a.page.goto('/play')
+  await expect(a.page.getByTestId(`remove-room-${code}`)).toHaveText('Delete')
+  await a.page.getByTestId(`remove-room-${code}`).click()
+  await a.page.getByTestId('confirm-remove-room').click()
+  await expect(a.page.getByTestId(`remove-room-${code}`)).toHaveCount(0, { timeout: 15_000 })
+  await expect(b.page.getByTestId('join-room')).toBeVisible({ timeout: 15_000 })
+  for (const u of [a, b]) {
+    expect(await readRecords(u.page, { collection: 'rooms', where: { code } })).toEqual([])
+    expect(await readRecords(u.page, { collection: 'rounds', where: { roomId } })).toEqual([])
+  }
+})
+
 test('"Why?" streams a Claude explanation after the reveal and both players get the saved copy', async ({ users }) => {
   // Real AI call through the DeepSpace proxy (owner-billed, 2000 output tokens max).
   test.setTimeout(180_000)

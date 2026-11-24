@@ -7,7 +7,7 @@ A 2–4 player mahjong discard race. Everyone in a room sees the same 14-tile ri
 Built on [DeepSpace](https://docs.deep.space) (Cloudflare Workers + Durable Objects): Google sign-in, live sync, presence, server-enforced permissions and the AI proxy.
 
 ## How it plays
-1. Sign in with Google, go to **Play**, and create a room. Share the 5-letter code (or the `/room/CODE` link).
+1. Sign in with Google, go to **Play**, and create a room. Share the 5-letter code, or click **Copy invite link** in the room.
 2. With 2–4 players in, the host starts a round. The server deals one hand for everyone.
 3. Click a tile, then **Lock in**. Other players see a "locked in" badge for you, never your tile.
 4. Reveal happens when everyone has locked or after 30s. Scoring:
@@ -15,7 +15,7 @@ Built on [DeepSpace](https://docs.deep.space) (Cloudflare Workers + Durable Obje
    - **1** if the shanten matches the best but the ukeire is lower
    - **0** otherwise
    - **+1** to the fastest optimal pick
-5. **Why?** streams an explanation; both players then see the saved copy. The host deals the **Next round**, and scores keep adding up. There's no fixed game length yet. Rooms you're in are listed under **Your rooms** on the Play page, so you can leave and come back.
+5. **Why?** streams an explanation; both players then see the saved copy. The host deals the **Next round**, and scores keep adding up. There's no fixed game length yet. Rooms you're in are listed under **Your rooms** on the Play page, so you can leave the page and come back. From there the host can **Delete** a room (for everyone, with its rounds and scores), and other players can **Leave** it.
 
 ## How picks stay hidden
 - Picks are stored in their own `picks` collection, readable only by the player who made it (`read: 'own'` for every role, including the app owner). The Durable Object filters rows **before** anything goes over the WebSocket.
@@ -28,7 +28,7 @@ Built on [DeepSpace](https://docs.deep.space) (Cloudflare Workers + Durable Obje
 |---|---|
 | `src/lib/shanten/` | Pure TypeScript shanten + ukeire (standard, chiitoitsu, kokushi). No DeepSpace imports. |
 | `src/schemas/game-schema.ts` | Collections and their permissions |
-| `src/actions/index.ts` | Server actions: create/join room, start round, lock in, reveal, scoring |
+| `src/actions/index.ts` | Server actions: create/join/leave/delete room, start round, lock in, reveal, scoring |
 | `src/ai/explain.ts`, `src/ai/explain-input.ts` | `/api/explain` streaming route; system prompt and structured input |
 | `src/pages/(app)/(protected)/` | `play.tsx` (create/join), `room/[code].tsx` (lobby, round, reveal) |
 | `scripts/verify-shanten/` | Python generator for reference fixtures (uses the `mahjong` package) |

@@ -296,3 +296,21 @@ User verified checks 1–6 and 10 on the live site (two accounts; "Why?" shared 
 - **Test:** new e2e test. B leaves for /play, clicks the room under "Your rooms" and lands back in it; at a 375px viewport all 14 tiles share one top edge and fit inside the screen. `npx deepspace test run e2e`: 25 passed.
 - **Checked from the CLI:** `npx deepspace secrets list` shows no secrets in prd, so `ALLOW_DEBUG_ROUTES` is unset. `npx deepspace app usage` shows anthropic 24 calls for $0.02 total (all test runs plus the hand check) and 498/500 free credits left.
 - **Still for a human:** check 7 (third account / full room); tap accuracy on a small phone with the narrower tiles.
+
+## 2026-11-24: delete/leave rooms, copy invite link
+User hand-checked check 7: the join prompt works by link, and a fifth account is refused with "Room full". They asked for a way to delete rooms and an invite-link button.
+- **Server actions** (`src/actions/index.ts`):
+  - `leaveRoom(code)`: non-host only. It removes the caller's member row and re-syncs `playerIds`; the same re-check pattern as join, so a concurrent join and leave converge.
+  - `deleteRoom(code)`: host only. It deletes the room record first, so nobody can join or start a round once it's gone. Then it deletes every round with its locks, picks, reveals and explanations, then the members. `deleteWhere` deletes one page per call, so a `drain` helper repeats it until a call deletes nothing.
+  - **Rejected:** letting the host leave with host passed to the next player. The user asked for delete, and handing over host adds rules (who, and what if they're away) nobody asked for. The host's button is "Delete"; everyone else's is "Leave".
+  - **Known limit:** if `deleteRoom` fails partway, some rows are left that no page can reach (marked `shortcut:` in the code).
+  - **A player who leaves mid-round** stays in that round's snapshot: their lock still counts, or the round reveals at the deadline.
+- **UI:**
+  - Each row under "Your rooms" has a Delete or Leave button with a confirm dialog (the scaffold's `Dialog`).
+  - The room header has "Copy invite link" (`navigator.clipboard`; if copying fails, the toast shows the link instead).
+  - After a delete, other players' room pages fall back to the join prompt; joining then says "No room with that code".
+- **Tests:**
+  - New e2e test: A copies the invite and the clipboard holds the room URL; B leaves and A's player list drops to 1; B rejoins by link; A deletes; afterwards both users' direct reads of `rooms` and `rounds` for that room return nothing.
+  - `api.spec.ts` checks that both new actions return 401 without a token.
+  - `npx deepspace test run e2e`: 28 passed.
+- **Still for a human:** delete a room that has a few rounds on production, and confirm the other player's page drops back to the join prompt.

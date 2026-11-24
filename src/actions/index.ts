@@ -137,9 +137,9 @@ async function backfillMembers(tools: ActionTools, room: { id: string; data: Roo
 }
 
 /**
- * Rewrite rooms.playerIds from the member rows until they agree. Member rows only change by
- * insert or by a rank-5+ row backing out, so a stale write is always followed by its writer's
- * own re-check, which repairs it.
+ * Rewrite rooms.playerIds from the member rows until they agree. Every writer of member rows
+ * (join, back-out, leave) calls this afterwards, so a stale write is always followed by its
+ * writer's own re-check, which repairs it.
  */
 async function syncPlayerIds(tools: ActionTools, roomId: string): Promise<string[]> {
   for (let i = 0; i < 5; i++) {
@@ -155,6 +155,15 @@ async function syncPlayerIds(tools: ActionTools, roomId: string): Promise<string
 async function findRoomByCode(tools: ActionTools, code: string) {
   const rooms = await queryData<Room>(tools, 'rooms', { code })
   return rooms[0] ?? null
+}
+
+/** deleteWhere removes one page per call; repeat until a call deletes nothing. */
+async function drain(tools: ActionTools, coll: string, where: Record<string, unknown>) {
+  for (;;) {
+    const r = await tools.deleteWhere(coll, where)
+    if (!r.success) throw new Error(r.error)
+    if (r.data.deleted === 0) return
+  }
 }
 
 export const actions: Record<string, ActionHandler<Env>> = {
@@ -194,6 +203,36 @@ export const actions: Record<string, ActionHandler<Env>> = {
     }
     await syncPlayerIds(tools, room.id)
     return { success: true, data: { code } }
+  },
+
+  leaveRoom: async ({ userId, params, tools }) => {
+    const room = await findRoomByCode(tools, String(params.code ?? ''))
+    if (!room || !room.data.playerIds.includes(userId)) return fail('Room not found')
+    if (room.data.hostId === userId) return fail('The host deletes the room instead of leaving it')
+    await backfillMembers(tools, room)
+    await drain(tools, 'members', { roomId: room.id, userId })
+    await syncPlayerIds(tools, room.id)
+    return { success: true, data: { left: true } }
+  },
+
+  deleteRoom: async ({ userId, params, tools }) => {
+    const room = await findRoomByCode(tools, String(params.code ?? ''))
+    if (!room || !room.data.playerIds.includes(userId)) return fail('Room not found')
+    if (room.data.hostId !== userId) return fail('Only the host can delete the room')
+    // Room first: once it's gone nobody can join or start a round in it.
+    // shortcut: a failure partway leaves rows no page can reach; add a cleanup job if that ever shows up.
+    const del = await tools.remove('rooms', room.id)
+    if (!del.success) return del
+    for (;;) {
+      const rounds = await queryData<Round>(tools, 'rounds', { roomId: room.id })
+      if (!rounds.length) break
+      for (const r of rounds) {
+        for (const coll of ['locks', 'picks', 'reveals', 'explanations']) await drain(tools, coll, { roundId: r.id })
+        await tools.remove('rounds', r.id)
+      }
+    }
+    await drain(tools, 'members', { roomId: room.id })
+    return { success: true, data: { deleted: true } }
   },
 
   startRound: async ({ userId, params, tools }) => {
