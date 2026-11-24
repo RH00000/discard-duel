@@ -109,3 +109,20 @@
 
 **Needs a human**
 - Sign in with a real Google account on the live site, and play one round from two browsers or devices.
+
+## 2026-11-23 — Deploy of the game
+**Did**
+- Pushed `a0c806f` and `e82295c` to GitHub, then ran `npx deepspace deploy` (GitHub source, clean working tree). That created release #2, `rel_01M861S05X58PF6CG7YD1VFQJR`; release #1 stays available for rollback.
+- Live checks:
+  - `/`, `/home`, `/play`, `/room/ABCDE` return 200
+  - `POST /api/actions/lockIn` without a token returns 401
+  - `deepspace logs` shows no exceptions or errors
+
+**Not verified on production**
+- The 2-player e2e ran against the local dev server only. Production needs a real sign-in, because the e2e fixture accounts are for local runs.
+
+**Needs a human**
+- Play one full round on https://discard-duel.app.space with two Google accounts. Check:
+  - the lobby dots
+  - that the lock badges appear without revealing picks
+  - the reveal table and running scores
