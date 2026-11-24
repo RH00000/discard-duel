@@ -159,7 +159,7 @@ export default function Navigation() {
         )}
       </nav>
 
-      {showAuthModal && <AuthOverlay onClose={() => setShowAuthModal(false)} />}
+      {showAuthModal && <AuthOverlay title={`Sign in to ${APP_NAME}`} onClose={() => setShowAuthModal(false)} />}
     </>
   )
 }

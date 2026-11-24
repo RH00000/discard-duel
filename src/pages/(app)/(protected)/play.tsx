@@ -37,7 +37,7 @@ export default function PlayPage() {
   return (
     <div className="mx-auto flex max-w-md flex-col gap-8 px-6 py-16">
       <div>
-        <h1 className="text-2xl font-semibold">Discard Duel</h1>
+        <h1 className="text-2xl font-semibold">Mahjong Discard Duel</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Everyone gets the same 14 tiles. Pick the best discard before the 30-second timer runs out.
         </p>

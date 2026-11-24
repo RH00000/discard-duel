@@ -1,4 +1,4 @@
-# Discard Duel
+# Mahjong Discard Duel
 
 A 2–4 player mahjong discard race. Everyone in a room sees the same 14-tile riichi hand and has 30 seconds to lock in the single best discard. Players see **who** has locked in, never **what**, until everyone has locked or time runs out. Then the reveal shows each pick's shanten and ukeire next to the optimal discard(s), awards points, and offers a Claude-written "Why?" explanation built only from the computed numbers.
 

@@ -314,3 +314,13 @@ User hand-checked check 7: the join prompt works by link, and a fifth account is
   - `api.spec.ts` checks that both new actions return 401 without a token.
   - `npx deepspace test run e2e`: 28 passed.
 - **Still for a human:** delete a room that has a few rounds on production, and confirm the other player's page drops back to the join prompt.
+
+## 2026-11-24: display name "Mahjong Discard Duel"
+- `APP_NAME` in `src/constants.ts` drives the nav header, the `<title>` of app pages, the landing page, the 404 title and SEO/OG tags.
+- Also changed:
+  - the static `<title>` in `index.html`
+  - the H1 on /home and /play
+  - the sign-in screens: `AuthOverlay title` in Navigation and the protected layout, plus the signed-out panel heading
+  - the README H1
+- **Left unchanged on purpose:** the repo, package name, the wrangler `name`/app slug/URL, and the `APP_NAME` var in wrangler.toml. That var is deploy config and is only read by the scaffold's AI chat system prompt.
+- **Tests:** vitest 19/19, e2e 28/28.
