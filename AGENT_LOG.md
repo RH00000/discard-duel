@@ -215,3 +215,4 @@
 
 **Needs a human**
 - Ideally a short concurrent-join load test against production to reproduce the old race and confirm the fix there.
+- Deployed as release #3 (`rel_01M86550H2GRGYHQ4P446J3TX4`). Live checks: `/` and `/play` return 200, `joinRoom` without a token returns 401, `deepspace logs` shows 0 errors or exceptions. Release #2 is available for rollback.
