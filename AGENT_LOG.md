@@ -285,3 +285,14 @@
   - the repo scan found no provider keys
 
   Not checked live: an actual "Why?" call (needs two signed-in players and a revealed round).
+
+## 2026-11-24: fixes from the hand-check on production
+User verified checks 1–6 and 10 on the live site (two accounts; "Why?" shared copy; scores match; phone works).
+- **Problem:** after clicking Home/Play there was no way back to a room except retyping its code.
+  **Fix:** the Play page lists "Your rooms" (`useQuery('rooms')`, which RBAC already limits to rooms the caller is in; filtered client-side by `playerIds` too, because the app owner's admin role may see more). Newest first, each links to `/room/CODE`. Rejected: a stored "current room" per user; the room list needs no new data.
+- **Problem:** on a phone the 14-tile hand wrapped to two rows.
+  **Fix:** below the `sm` breakpoint the hand is a 14-column grid and tiles shrink to fit (`Tile` md size is `w-full h-12` on phones, unchanged from `sm` up). Rejected: 7+7 rows (easier to tap, but a mahjong hand reads as one row).
+- Files: `src/pages/(app)/(protected)/play.tsx`, `src/pages/(app)/(protected)/room/[code].tsx`, `src/components/game/Tile.tsx`, `tests/collab.spec.ts`, README.md.
+- **Test:** new e2e test. B leaves for /play, clicks the room under "Your rooms" and lands back in it; at a 375px viewport all 14 tiles share one top edge and fit inside the screen. `npx deepspace test run e2e`: 25 passed.
+- **Checked from the CLI:** `npx deepspace secrets list` shows no secrets in prd, so `ALLOW_DEBUG_ROUTES` is unset. `npx deepspace app usage` shows anthropic 24 calls for $0.02 total (all test runs plus the hand check) and 498/500 free credits left.
+- **Still for a human:** check 7 (third account / full room); tap accuracy on a small phone with the narrower tiles.

@@ -189,7 +189,7 @@ function PickingView({ round, userId, name }: { round: RecordData<Round>; userId
           {remaining}s
         </span>
       </div>
-      <div className="flex flex-wrap gap-1.5" data-testid="hand">
+      <div className="grid grid-cols-[repeat(14,minmax(0,1fr))] gap-0.5 sm:flex sm:gap-1.5" data-testid="hand">
         {round.data.hand.map((t, i) => (
           <Tile
             key={i}
@@ -234,7 +234,7 @@ function RevealView({ round, name }: { round: RecordData<Round>; name: (id: stri
   return (
     <section className="flex flex-col gap-6" aria-label={`Round ${round.data.number} results`} data-testid="reveal">
       <h2 className="text-lg font-semibold">Round {round.data.number}: results</h2>
-      <div className="flex flex-wrap gap-1.5">
+      <div className="grid grid-cols-[repeat(14,minmax(0,1fr))] gap-0.5 sm:flex sm:gap-1.5">
         {round.data.hand.map((t, i) => <Tile key={i} tile={t} dim={!bestTiles.has(t)} />)}
       </div>
       <p className="text-sm" data-testid="best">

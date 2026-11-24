@@ -27,7 +27,7 @@ export function Tile({ tile, selected, dim, onClick, size = 'md' }: TileProps) {
       data-tile={tileName(tile)}
       className={cn(
         'inline-flex flex-col items-center justify-center rounded-md border bg-amber-50 font-semibold shadow-sm transition',
-        size === 'md' ? 'h-16 w-11 text-xl' : 'h-10 w-7 text-sm',
+        size === 'md' ? 'h-12 w-full text-base sm:h-16 sm:w-11 sm:text-xl' : 'h-10 w-7 text-sm',
         SUIT_STYLE[suit],
         onClick && 'cursor-pointer hover:-translate-y-1',
         selected ? '-translate-y-2 border-primary ring-2 ring-primary' : 'border-stone-300',

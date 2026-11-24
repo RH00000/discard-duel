@@ -15,7 +15,7 @@ Built on [DeepSpace](https://docs.deep.space) (Cloudflare Workers + Durable Obje
    - **1** if the shanten matches the best but the ukeire is lower
    - **0** otherwise
    - **+1** to the fastest optimal pick
-5. **Why?** streams an explanation; both players then see the saved copy. The host deals the **Next round**, and scores keep adding up. There's no fixed game length yet.
+5. **Why?** streams an explanation; both players then see the saved copy. The host deals the **Next round**, and scores keep adding up. There's no fixed game length yet. Rooms you're in are listed under **Your rooms** on the Play page, so you can leave and come back.
 
 ## How picks stay hidden
 - Picks are stored in their own `picks` collection, readable only by the player who made it (`read: 'own'` for every role, including the app owner). The Durable Object filters rows **before** anything goes over the WebSocket.

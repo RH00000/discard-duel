@@ -263,6 +263,23 @@ test('full 2-player round: picks hidden until reveal, then visible and scored', 
   await expect(a.page.getByTestId(`score-${a.userId}`)).toHaveText(aScoreOnB!)
 })
 
+test('a player who leaves for /play can get back to the room from "Your rooms", and a phone shows the hand in one row', async ({ users }) => {
+  test.setTimeout(60_000)
+  const { b } = await createAndJoin(users)
+  const code = b.page.url().split('/').pop()!
+  await b.page.goto('/play')
+  await b.page.getByTestId('my-rooms').getByRole('link', { name: new RegExp(code) }).click()
+  await expect(b.page).toHaveURL(new RegExp(`/room/${code}$`))
+
+  await b.page.setViewportSize({ width: 375, height: 800 })
+  const tiles = b.page.getByTestId('hand').locator('button')
+  await expect(tiles).toHaveCount(14, { timeout: 15_000 })
+  const tops = await tiles.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)))
+  expect(new Set(tops).size).toBe(1)
+  const right = await tiles.last().evaluate((el) => el.getBoundingClientRect().right)
+  expect(right).toBeLessThanOrEqual(375)
+})
+
 test('"Why?" streams a Claude explanation after the reveal and both players get the saved copy', async ({ users }) => {
   // Real AI call through the DeepSpace proxy (owner-billed, 2000 output tokens max).
   test.setTimeout(180_000)

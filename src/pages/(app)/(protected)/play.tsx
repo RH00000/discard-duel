@@ -1,13 +1,21 @@
 import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { useAuth, useQuery } from 'deepspace'
 import { Button, Input, Label, useToast } from '@/components/ui'
 import { callAction } from '@/lib/call-action'
+import type { Room } from '@/schemas/game-schema'
 
 export default function PlayPage() {
   const navigate = useNavigate()
   const { error } = useToast()
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState<'create' | 'join' | null>(null)
+  const { userId } = useAuth()
+  // Room reads are already limited to members; the filter also hides other rooms from the app owner (admin).
+  const { records: rooms } = useQuery<Room>('rooms')
+  const myRooms = rooms
+    .filter((r) => userId && r.data.playerIds.includes(userId))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 
   async function run(kind: 'create' | 'join', fn: () => Promise<{ code: string }>) {
     setBusy(kind)
@@ -60,6 +68,27 @@ export default function PlayPage() {
           </Button>
         </div>
       </form>
+      {myRooms.length > 0 && (
+        <section className="flex flex-col gap-2" data-testid="my-rooms">
+          <h2 className="text-sm font-medium">Your rooms</h2>
+          <ul className="flex flex-col gap-2">
+            {myRooms.map((r) => (
+              <li key={r.recordId}>
+                <Link
+                  to={`/room/${r.data.code}`}
+                  className="flex items-center justify-between rounded-md border px-3 py-2 text-sm hover:bg-muted"
+                >
+                  <span className="font-mono tracking-widest">{r.data.code}</span>
+                  <span className="text-muted-foreground">
+                    {r.data.playerIds.length} player{r.data.playerIds.length === 1 ? '' : 's'}
+                    {r.data.hostId === userId && ' · host'}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   )
 }
