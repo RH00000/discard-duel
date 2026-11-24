@@ -216,3 +216,26 @@
 **Needs a human**
 - Ideally a short concurrent-join load test against production to reproduce the old race and confirm the fix there.
 - Deployed as release #3 (`rel_01M86550H2GRGYHQ4P446J3TX4`). Live checks: `/` and `/play` return 200, `joinRoom` without a token returns 401, `deepspace logs` shows 0 errors or exceptions. Release #2 is available for rollback.
+
+## 2026-11-24 — Shanten verified against a reference implementation
+**Did**
+- `scripts/verify-shanten/`:
+  - a Python venv (gitignored via `.venv/`) with `mahjong` 2.3.0, pinned in `requirements.txt`
+  - `generate.py`: seed 20261124 draws 20,000 legal 13-tile hands and 5,000 legal 14-tile hands from a shuffled 136-tile wall (so at most 4 copies of any tile), and writes `mahjong.shanten.Shanten.calculate_shanten` results to `fixtures.json` (1.2 MB)
+- `src/lib/shanten/reference.test.ts`: loads the fixtures and compares `shanten()` on every hand. On any mismatch it prints the first 10 (tiles, expected, got) and fails.
+- `.gitignore`: added `.venv/` and `__pycache__/`.
+
+**Result: 25,000 / 25,000 match. No implementation change was needed.**
+
+**Checks on the check**
+- Mutation test: disabling one rule (kanchan/gap shapes like 1-3) in `standardShanten` dropped the score to 16,649/25,000, and the test printed mismatches such as `2m 2m 3m 9m 1p 8p 9p 1s 2s 4s 6s 6z 7z expected 4, got 5`. Restored from git afterwards.
+- The fixture's shanten distribution is `{0: 6, 1: 243, 2: 2872, 3: 9569, 4: 9165, 5: 2960, 6: 185}`. Random hands almost never hit complete hands (-1), tenpai (only 6), chiitoitsu-favoured or kokushi shapes, or the 4-copy edge case. Those are covered by the hand-written cases in `shanten.test.ts`, not by this fixture.
+
+**Broke / fixed**
+- The first version read the fixture with `node:fs`. Vitest passed, but `tsc` failed (`Cannot find module 'node:fs'`), because `src/` is typed as browser/Worker code. Switched to a Vite `?raw` import plus `JSON.parse`, which also avoids type inference over 1.2 MB of JSON. `vite build` output does not contain the fixture.
+
+**Decisions**
+- Kept the test next to the shanten code in `src/lib/shanten/` rather than moving it to the repo root with Node types, so `npx vitest run` still runs it with the rest of the shanten tests. Rejected adding `@types/node` to `src/`, because Node APIs would then type-check in Worker code.
+
+**Needs a human**
+- Nothing blocking. Optionally generate a second fixture weighted towards low-shanten hands (e.g. built from complete hands with tiles swapped out) to stress tenpai, chiitoitsu and kokushi paths against the reference.

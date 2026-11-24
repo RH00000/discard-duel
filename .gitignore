@@ -19,3 +19,7 @@ src/modals.tsx
 .env.*
 *.pem
 *.key
+
+# python
+.venv/
+__pycache__/
