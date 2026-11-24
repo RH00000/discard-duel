@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useAuth, usePresenceRoom, useQuery, useUserLookup, type RecordData } from 'deepspace'
 import { Badge, Button, cn, useToast } from '@/components/ui'
 import { Tile } from '@/components/game/Tile'
+import { WhyPanel } from '@/components/game/WhyPanel'
 import { callAction } from '@/lib/call-action'
 import { tileName } from '@/lib/shanten'
 import type { Lock, Pick, Room, Round } from '@/schemas/game-schema'
@@ -260,6 +261,7 @@ function RevealView({ round, name }: { round: RecordData<Round>; name: (id: stri
           ))}
         </tbody>
       </table>
+      <WhyPanel roundId={round.recordId} />
     </section>
   )
 }

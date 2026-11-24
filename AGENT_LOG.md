@@ -239,3 +239,42 @@
 
 **Needs a human**
 - Nothing blocking. Optionally generate a second fixture weighted towards low-shanten hands (e.g. built from complete hands with tiles swapped out) to stress tenpai, chiitoitsu and kokushi paths against the reference.
+
+## 2026-11-24 — "Why?" explanations, privacy e2e, docs
+**Did**
+- **"Why?" after reveal.** `POST /api/explain` (`src/ai/explain.ts`, registered in `worker.ts`) streams Claude (`claude-haiku-5-5`) through `createDeepSpaceAI`, in the AI SDK UI-message stream format.
+  - Refuses with 401 (no JWT), 404 (not in the round, same error as a missing round) and 409 (not revealed yet, so it can't be used for hints mid-round).
+  - The input is recomputed on the server from the stored hand (`src/ai/explain-input.ts`): the hand, every distinct discard with `shantenAfter`, ukeire tiles with unseen counts, `ukeireTotal`, `optimal`, picks without user ids, and a `definitions` block.
+  - The system prompt restricts the model to those numbers: no rules, heuristics or efficiency claims, and say so if it can't answer.
+  - The finished text is saved once per round in the new `explanations` collection (`read: 'shared'` by round players, server-written only), so both players see it.
+  - The client (`src/components/game/WhyPanel.tsx`) decodes the stream with the SDK's `parseSseLine` + `decodeAiStreamChunk`.
+- **Billing / keys.** The call is owner-billed: no `authToken` is passed, so the proxy uses `APP_OWNER_JWT`. There's no provider key anywhere in the repo. `createActionTools` is now exported from `src/server/action-routes.ts` for the route's server-side reads.
+- **Privacy e2e** (`tests/collab.spec.ts`, full-round test). After A locks in, B reads directly through the app's agent-tools HTTP API (`/_deepspace/agent/browser/tools/records_*`, which runs as the caller with RBAC):
+  - `picks` by `roundId` and by A's `userId` both return `[]`
+  - `records_get` on A's exact pick record id is refused
+  - the round record has no results
+  - `/api/explain` returns 409
+
+  Sanity check: the same read path as A returns A's own pick.
+- **After reveal:** both players' data reads of `rounds.results` show the other's tile, and B still can't read A's raw pick row.
+- **"Why?" e2e:** A streams a real explanation, then B sees the saved copy and no "Why?" button.
+- `api.spec.ts`: `/api/explain` without a token returns 401.
+- **Docs:** `DECISIONS.md` rewritten (used: auth, sync, presence, permissions, AI; skipped: payments, storage, LiveKit; main tradeoff). New `README.md`.
+
+**Broke / fixed**
+- **Agent-tools route path.** `/_deepspace/agent/tools/*` answered 401 for a normal user JWT, because it needs an origin-bound agent token. Signed-in web users go through `/_deepspace/agent/browser/tools/*`, whose tool names use underscores (`records_query`).
+- **Intermittent empty "Why?".** One run showed no text and no error for 60s+. Server logging showed `finish=length` after only 406–620 characters with `maxOutputTokens: 600`: reasoning tokens share the cap, so answers were truncated or, at worst, empty. Two fixes:
+  - raised the cap to 2000 (the prompt keeps answers under 150 words)
+  - the client now shows "No explanation came back" instead of failing silently
+
+  After that, 8/8 repeated runs ended with `finish=stop` (487–825 chars), first text in about 2.4–2.9s.
+- **Explanation said "points" was undefined.** The model correctly said the JSON doesn't define "points". Added the game's scoring rule to `definitions`.
+- **Deadline-race test.** It failed once with "Round already revealed" instead of "Time is up": the reveal landed before the lock-in started. Both are correct refusals, and the real check (lock refused ⇔ results show no pick) held. The test now accepts either message.
+
+**Test results**
+- `npx vitest run`: 6 files, 19 tests passed.
+- `npx deepspace test run e2e`: 24 passed.
+
+**Needs a human**
+- Read several live "Why?" explanations and check that they only quote the given numbers.
+- Decide whether owner-billed AI is acceptable at scale (cost per round is roughly one short Haiku call).

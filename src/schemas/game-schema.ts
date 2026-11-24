@@ -101,7 +101,22 @@ export const revealsSchema: CollectionSchema = {
   permissions: { '*': none, viewer: none, member: none, admin: none },
 }
 
-export const gameSchemas = [roomsSchema, roundsSchema, locksSchema, picksSchema, membersSchema, revealsSchema]
+/** One saved AI explanation per revealed round, shared with that round's players. Written only by /api/explain. */
+export const explanationsSchema: CollectionSchema = {
+  name: 'explanations',
+  columns: [
+    { name: 'roundId', storage: 'text', interpretation: 'plain', required: true, immutable: true },
+    { name: 'text', storage: 'text', interpretation: 'plain', required: true },
+    { name: 'playerIds', storage: 'text', interpretation: json, required: true },
+  ],
+  uniqueOn: ['roundId'],
+  collaboratorsField: 'playerIds',
+  permissions: { '*': none, viewer: none, member: roomShared, admin: roomShared },
+}
+
+export const gameSchemas = [
+  roomsSchema, roundsSchema, locksSchema, picksSchema, membersSchema, revealsSchema, explanationsSchema,
+]
 
 export interface Room { code: string; hostId: string; playerIds: string[] }
 export interface PlayerResult {
@@ -129,3 +144,4 @@ export interface Round {
 }
 export interface Lock { roundId: string; userId: string; lockedAt: number; playerIds: string[] }
 export interface Pick { roundId: string; userId: string; tile: number }
+export interface Explanation { roundId: string; text: string; playerIds: string[] }

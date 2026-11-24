@@ -25,3 +25,8 @@ test.describe('game actions', () => {
     })
   }
 })
+
+test('explain route requires auth', async ({ request }) => {
+  const res = await request.post('/api/explain', { data: { roundId: 'x' } })
+  expect(res.status()).toBe(401)
+})

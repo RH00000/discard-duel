@@ -140,6 +140,43 @@ test('API status page shows local retry after first-load API failure', async ({ 
 const visiblePickOwners = (page: Page) =>
   page.getByTestId('visible-pick-owners').getAttribute('data-owners')
 
+/**
+ * Read data directly as this page's user, bypassing the UI: the app's agent-tools HTTP API
+ * (registered by the scaffold) runs records.* tools as the caller with normal RBAC.
+ */
+async function callTool(page: Page, tool: string, input: Record<string, unknown>) {
+  return page.evaluate(
+    async ({ tool, input }) => {
+      const { token } = await (await fetch('/api/auth/token', { method: 'POST', credentials: 'include' })).json()
+      const res = await fetch(`/_deepspace/agent/browser/tools/${tool}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ input }),
+      })
+      return { status: res.status, body: await res.json().catch(() => null) }
+    },
+    { tool, input },
+  )
+}
+
+async function readRecords(page: Page, input: Record<string, unknown>) {
+  const r = await callTool(page, 'records_query', input)
+  expect(r.status, JSON.stringify(r.body)).toBe(200)
+  return r.body.result.data.records as Array<{ recordId: string; data: Record<string, unknown> }>
+}
+
+async function explainStatus(page: Page, roundId: string) {
+  return page.evaluate(async (roundId) => {
+    const { token } = await (await fetch('/api/auth/token', { method: 'POST', credentials: 'include' })).json()
+    const res = await fetch('/api/explain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ roundId }),
+    })
+    return res.status
+  }, roundId)
+}
+
 async function createAndJoin(users: (n: number) => Promise<Array<{ page: Page; userId?: string }>>) {
   const [a, b] = await users(2)
   if (!a.userId || !b.userId) throw new Error('test accounts need saved userIds')
@@ -175,6 +212,25 @@ test('full 2-player round: picks hidden until reveal, then visible and scored', 
   expect(await visiblePickOwners(b.page)).toBe('')
   // Sanity: the same query on A's side does return A's own pick, so the empty result above is filtering, not a broken query.
   expect(await visiblePickOwners(a.page)).toBe(a.userId)
+  // Nothing in B's UI names A's tile: A's badge only says "locked in", and there's no results table yet.
+  await expect(b.page.getByTestId(`lock-${a.userId}`)).toHaveText(/locked in$/)
+  await expect(b.page.getByTestId('reveal')).toHaveCount(0)
+
+  // Direct data reads as each player, bypassing the UI.
+  const aOwn = (await readRecords(a.page, { collection: 'picks' })).find((r) => r.data.userId === a.userId)
+  expect(aOwn?.data.tile).toBe(tileIndex(aTile)) // the read path works: A gets A's own pick
+  const roundId = aOwn!.data.roundId as string
+  expect(await readRecords(b.page, { collection: 'picks', where: { roundId } })).toEqual([])
+  expect(await readRecords(b.page, { collection: 'picks', where: { userId: a.userId } })).toEqual([])
+  // Even knowing the exact record id, B is refused.
+  const byId = await callTool(b.page, 'records_get', { collection: 'picks', recordId: aOwn!.recordId })
+  expect(JSON.stringify(byId.body)).not.toContain(`"tile":${tileIndex(aTile)}`)
+  expect(byId.body?.result?.success ?? false).toBe(false)
+  // The round record B can read carries no pick data yet, and no explanation is available yet.
+  const roundBefore = await callTool(b.page, 'records_get', { collection: 'rounds', recordId: roundId })
+  expect(roundBefore.body.result.data.record.data.status).toBe('picking')
+  expect(roundBefore.body.result.data.record.data.results ?? null).toBeNull()
+  expect(await explainStatus(b.page, roundId)).toBe(409)
 
   // B locks in the last tile. B's socket now carries B's pick only — still never A's.
   const bTileBtn = b.page.getByTestId('hand').locator('button').last()
@@ -193,10 +249,40 @@ test('full 2-player round: picks hidden until reveal, then visible and scored', 
   // After reveal B CAN see A's pick (via rounds.results), proving the earlier check wasn't vacuous.
   await expect(b.page.getByTestId(`result-${a.userId}`)).toHaveAttribute('data-tile', aTile)
   await expect(a.page.getByTestId(`result-${b.userId}`)).toHaveAttribute('data-tile', bTile)
+  // ...and in the data itself, for both players.
+  for (const [viewer, owner, tile] of [[b, a, aTile], [a, b, bTile]] as const) {
+    const r = await callTool(viewer.page, 'records_get', { collection: 'rounds', recordId: roundId })
+    const players = r.body.result.data.record.data.results.players as Array<{ userId: string; tile: number }>
+    expect(players.find((p) => p.userId === owner.userId)?.tile).toBe(tileIndex(tile))
+  }
+  // Raw pick rows stay owner-only even after reveal; results are the only path.
+  expect(await readRecords(b.page, { collection: 'picks', where: { userId: a.userId } })).toEqual([])
   await expect(b.page.getByTestId('best')).toContainText('Best discard')
   // Scores are summed from results and shown to both players identically.
   const aScoreOnB = await b.page.getByTestId(`score-${a.userId}`).textContent()
   await expect(a.page.getByTestId(`score-${a.userId}`)).toHaveText(aScoreOnB!)
+})
+
+test('"Why?" streams a Claude explanation after the reveal and both players get the saved copy', async ({ users }) => {
+  // Real AI call through the DeepSpace proxy (owner-billed, 2000 output tokens max).
+  test.setTimeout(180_000)
+  const { a, b } = await createAndJoin(users)
+  for (const u of [a, b]) {
+    await u.page.getByTestId('hand').locator('button').first().click()
+    await u.page.getByTestId('lock-in').click()
+  }
+  for (const u of [a, b]) await expect(u.page.getByTestId('reveal')).toBeVisible({ timeout: 15_000 })
+
+  const t0 = Date.now()
+  await a.page.getByTestId('why-button').click()
+  // First text usually arrives in a few seconds; one cold run took >60s, so allow 90s.
+  await expect(a.page.getByTestId('why-text')).toHaveText(/\S+\s+\S+\s+\S+/, { timeout: 90_000 })
+  console.log(`why first text after ${Date.now() - t0}ms`)
+  // Once the stream ends the server saves it; B sees the same text without calling the model.
+  await expect(b.page.getByTestId('why-button')).toHaveCount(0, { timeout: 60_000 })
+  const text = (await b.page.getByTestId('why-text').textContent())!
+  expect(text.length).toBeGreaterThan(40)
+  console.log(`why-text sample: ${text.slice(0, 160).replace(/\s+/g, ' ')}…`)
 })
 
 test('timer expiry reveals the round with "no pick" for a player who never locked', async ({ users }) => {
@@ -321,6 +407,7 @@ test('lock-in racing the deadline reveal: success always means the pick was scor
   const shown = await b.page.getByTestId(`result-${b.userId}`).getAttribute('data-tile')
   // Either outcome is fine; disagreement is the bug.
   expect(shown).toBe(lock.success ? bTile : '')
-  if (!lock.success) expect(lock.error).toBe('Time is up')
+  // Refused either mid-write ("Time is up") or before it started, if a reveal landed first.
+  if (!lock.success) expect(['Time is up', 'Round already revealed']).toContain(lock.error)
   console.log(`deadline race outcome: lockIn ${lock.success ? 'counted' : `refused (${lock.error})`}`)
 })
