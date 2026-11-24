@@ -16,3 +16,12 @@ test.describe('API tests', () => {
     // If the app loaded and connected, the WS endpoint works
   })
 })
+
+test.describe('game actions', () => {
+  for (const name of ['createRoom', 'joinRoom', 'startRound', 'lockIn', 'revealRound']) {
+    test(`${name} requires auth`, async ({ request }) => {
+      const res = await request.post(`/api/actions/${name}`, { data: {} })
+      expect(res.status()).toBe(401)
+    })
+  }
+})

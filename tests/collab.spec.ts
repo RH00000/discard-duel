@@ -15,6 +15,7 @@
  * persisted to `~/.deepspace/playwright-states/`), context creation, and
  * cleanup. No need to manage browser contexts manually.
  */
+import type { Page } from '@playwright/test'
 import { test, expect, loadAllTestAccounts } from 'deepspace/testing'
 
 // A machine that has never created test accounts is the normal state of a
@@ -130,4 +131,83 @@ test('API status page shows local retry after first-load API failure', async ({ 
   await retryButton.click()
   await expect.poll(() => requestCount).toBeGreaterThan(requestsAfterFailure)
   expect(user.page.url()).toBe(urlAfterFailure)
+})
+
+// ── Discard Duel ────────────────────────────────────────────────────────────
+
+
+/** Which users' pick rows reached this browser (the DO filters before sending). */
+const visiblePickOwners = (page: Page) =>
+  page.getByTestId('visible-pick-owners').getAttribute('data-owners')
+
+async function createAndJoin(users: (n: number) => Promise<Array<{ page: Page; userId?: string }>>) {
+  const [a, b] = await users(2)
+  if (!a.userId || !b.userId) throw new Error('test accounts need saved userIds')
+  await a.page.goto('/play')
+  await a.page.getByTestId('create-room').click()
+  await expect(a.page).toHaveURL(/\/room\/[A-Z0-9]{5}$/, { timeout: 15_000 })
+  const code = a.page.url().split('/').pop()!
+
+  await b.page.goto(`/room/${code}`)
+  await b.page.getByTestId('join-room').click()
+  await expect(b.page.getByTestId('room-code')).toHaveText(code, { timeout: 15_000 })
+  await expect(a.page.getByTestId('players').locator('li')).toHaveCount(2, { timeout: 15_000 })
+
+  await a.page.getByTestId('start-round').click()
+  for (const u of [a, b]) await expect(u.page.getByTestId('hand').locator('button')).toHaveCount(14, { timeout: 15_000 })
+  return { a: a as { page: Page; userId: string }, b: b as { page: Page; userId: string } }
+}
+
+test('full 2-player round: picks hidden until reveal, then visible and scored', async ({ users }) => {
+  test.setTimeout(90_000)
+  const { a, b } = await createAndJoin(users)
+
+  // A locks in the first tile.
+  const aTileBtn = a.page.getByTestId('hand').locator('button').first()
+  const aTile = (await aTileBtn.getAttribute('data-tile'))!
+  await aTileBtn.click()
+  await a.page.getByTestId('lock-in').click()
+  await expect(a.page.getByTestId('my-pick')).toContainText(aTile)
+
+  // B sees THAT A locked in, but not WHAT: no pick row of A's ever reached B's socket.
+  await expect(b.page.getByTestId(`lock-${a.userId}`)).toHaveAttribute('data-locked', 'true')
+  await expect(b.page.getByTestId('timer')).toBeVisible()
+  expect(await visiblePickOwners(b.page)).toBe('')
+  // Sanity: the same query on A's side does return A's own pick, so the empty result above is filtering, not a broken query.
+  expect(await visiblePickOwners(a.page)).toBe(a.userId)
+
+  // B locks in the last tile. B's socket now carries B's pick only — still never A's.
+  const bTileBtn = b.page.getByTestId('hand').locator('button').last()
+  const bTile = (await bTileBtn.getAttribute('data-tile'))!
+  await bTileBtn.click()
+  await b.page.getByTestId('lock-in').click()
+
+  // Everyone locked -> server reveals without waiting for the timer.
+  for (const u of [a, b]) await expect(u.page.getByTestId('reveal')).toBeVisible({ timeout: 15_000 })
+
+  // B's live picks subscription holds exactly B's own row (so it IS loading), and A's raw
+  // pick row never reaches B — not even after reveal. A's pick reaches B only via rounds.results.
+  await expect.poll(() => visiblePickOwners(b.page)).toBe(b.userId)
+  await expect.poll(() => visiblePickOwners(a.page)).toBe(a.userId)
+
+  // After reveal B CAN see A's pick (via rounds.results), proving the earlier check wasn't vacuous.
+  await expect(b.page.getByTestId(`result-${a.userId}`)).toHaveAttribute('data-tile', aTile)
+  await expect(a.page.getByTestId(`result-${b.userId}`)).toHaveAttribute('data-tile', bTile)
+  await expect(b.page.getByTestId('best')).toContainText('Best discard')
+  // Scores are summed from results and shown to both players identically.
+  const aScoreOnB = await b.page.getByTestId(`score-${a.userId}`).textContent()
+  await expect(a.page.getByTestId(`score-${a.userId}`)).toHaveText(aScoreOnB!)
+})
+
+test('timer expiry reveals the round with "no pick" for a player who never locked', async ({ users }) => {
+  test.setTimeout(120_000)
+  const { a, b } = await createAndJoin(users)
+  await a.page.getByTestId('hand').locator('button').first().click()
+  await a.page.getByTestId('lock-in').click()
+  await expect(a.page.getByTestId('my-pick')).toBeVisible()
+
+  // B never locks; the 30s deadline passes and a client-triggered reveal is accepted by the server.
+  await expect(b.page.getByTestId('reveal')).toBeVisible({ timeout: 45_000 })
+  await expect(b.page.getByTestId(`result-${b.userId}`)).toHaveAttribute('data-tile', '')
+  await expect(b.page.getByTestId(`result-${b.userId}`)).toContainText('no pick')
 })
