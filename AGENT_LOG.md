@@ -278,3 +278,10 @@
 **Needs a human**
 - Read several live "Why?" explanations and check that they only quote the given numbers.
 - Decide whether owner-billed AI is acceptable at scale (cost per round is roughly one short Haiku call).
+- Deployed as release #4 (`rel_01M8691T261B6ZW9X2VA9KFAR7`). Live checks:
+  - `/`, `/home` and `/play` return 200
+  - `/api/explain` and `/api/actions/lockIn` without a token return 401
+  - `deepspace logs` shows 0 errors or exceptions
+  - the repo scan found no provider keys
+
+  Not checked live: an actual "Why?" call (needs two signed-in players and a revealed round).
