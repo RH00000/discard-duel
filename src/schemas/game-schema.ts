@@ -73,7 +73,35 @@ export const picksSchema: CollectionSchema = {
   permissions: { '*': none, viewer: none, member: ownOnly, admin: ownOnly },
 }
 
-export const gameSchemas = [roomsSchema, roundsSchema, locksSchema, picksSchema]
+/**
+ * One row per room member; uniqueOn makes each join an atomic insert. Server-only:
+ * clients read membership from rooms.playerIds, which joinRoom rebuilds from these rows.
+ */
+export const membersSchema: CollectionSchema = {
+  name: 'members',
+  columns: [
+    { name: 'roomId', storage: 'text', interpretation: 'plain', required: true, immutable: true },
+    { name: 'userId', storage: 'text', interpretation: 'plain', required: true, immutable: true },
+  ],
+  uniqueOn: ['roomId', 'userId'],
+  permissions: { '*': none, viewer: none, member: none, admin: none },
+}
+
+/**
+ * The reveal claim: uniqueOn roundId means only the first reveal's results are ever stored;
+ * later reveals copy these instead of recomputing. Server-only.
+ */
+export const revealsSchema: CollectionSchema = {
+  name: 'reveals',
+  columns: [
+    { name: 'roundId', storage: 'text', interpretation: 'plain', required: true, immutable: true },
+    { name: 'results', storage: 'text', interpretation: json, required: true, immutable: true },
+  ],
+  uniqueOn: ['roundId'],
+  permissions: { '*': none, viewer: none, member: none, admin: none },
+}
+
+export const gameSchemas = [roomsSchema, roundsSchema, locksSchema, picksSchema, membersSchema, revealsSchema]
 
 export interface Room { code: string; hostId: string; playerIds: string[] }
 export interface PlayerResult {

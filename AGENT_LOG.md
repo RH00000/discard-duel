@@ -172,3 +172,46 @@
 **Needs a human**
 - Decide which of findings 1–3 (and optionally 6–7) to fix.
 - Confirm `ALLOW_DEBUG_ROUTES` is never set in production.
+
+## 2026-11-24 — Fixed review findings 1–3
+**Did** (files: `src/schemas/game-schema.ts`, `src/actions/index.ts`, `tests/collab.spec.ts`)
+1. **Joins can no longer silently drop a player.**
+   - New server-only `members` collection: one row per (room, user), `uniqueOn`. The insert is the atomic join step.
+   - Players are ranked by join order (`createdAt`, then recordId), and the first 4 are in. A rank-5+ joiner deletes its own row and gets "Room full".
+   - `rooms.playerIds` is now a derived copy. `syncPlayerIds` rewrites it from the member rows and re-checks until they agree.
+   - `startRound` snapshots the synced list.
+   - Rooms created before this change get their members backfilled once from `playerIds`, so the host isn't dropped by the next join.
+2. **Reveal is atomic.**
+   - New server-only `reveals` collection, `uniqueOn: roundId`, holding the results. The first reveal to insert it fixes the results; any later or concurrent reveal copies those exact results instead of recomputing.
+   - Early reveal now needs every player to have both a lock row and a pick row, not just a lock.
+3. **Lock-in is gated by the lock row.**
+   - `lockIn` creates the lock first; its `uniqueOn` refuses a second concurrent request before it can touch the pick.
+   - If writing the pick fails, the lock is removed.
+   - After writing, if a reveal that started earlier didn't count this pick, `lockIn` deletes its own lock and pick rows and returns "Time is up". A successful lock-in now always means the pick was scored.
+
+**Decisions**
+- Kept `rooms.playerIds` as the client-facing membership list (and RBAC `collaboratorsField`) instead of moving reads to `members`, because `'shared'` needs the ids on the record itself. Rejected making `members` client-readable: it would add a second source the UI would need to reconcile.
+- Store the results in the claim row rather than claim-then-compute, so a reveal that dies halfway can be finished by any later call with identical results.
+
+**Tests**
+- Added to `tests/collab.spec.ts`:
+  - concurrent joins (4 users)
+  - racing for the last seat (5 users)
+  - double lock-in
+  - lock-in racing the deadline reveal
+
+  They call actions as real concurrent requests from signed-in pages, using the SDK's `/api/auth/token`.
+- Created 3 more fixture accounts (`duel-c/d/e@deepspace.test`), 5 of the 10 allowed.
+- Results: `vitest` 15/15 and `deepspace test run e2e` 22/22.
+
+**What the new tests do and don't prove** (each was also run against the pre-fix code)
+- **Double lock-in:** fails on the old code (`Received: "Duplicate: … already exists in picks"`) and passes on the new code. This is a real regression test.
+- **Both join races:** pass on the old code too, even after 8 repeats. The local dev server didn't open the race window. They check the new behaviour (exactly one winner, 4 players listed, the winner is listed) but **would not catch a regression**. The join fix is verified by code review, not by a reproduced failure.
+- **Deadline race:** passes on both versions. In every run, B's lock-in landed after the deadline and got "Time is up", so only the refusal path was exercised. The "counted" branch of the late-lock undo has not been hit by a test.
+
+**Known limits that remain**
+- The late-lock undo relies on the reveal claim existing by the time `lockIn` checks it. A reveal triggered on a different worker isolate whose clock is ahead could, in principle, insert its claim after that check and leave a successful lock-in uncounted. This window is sub-millisecond clock skew.
+- Findings 4–7 from the review (debug-route note, recordId oracles, no role check on actions, dead mid-round UI text) are unchanged.
+
+**Needs a human**
+- Ideally a short concurrent-join load test against production to reproduce the old race and confirm the fix there.

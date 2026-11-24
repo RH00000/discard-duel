@@ -51,8 +51,10 @@ async function getData<T>(tools: ActionTools, coll: string, id: string): Promise
 async function queryData<T>(tools: ActionTools, coll: string, where: Record<string, unknown>) {
   const r = await tools.query(coll, { where, limit: 100 })
   if (!r.success) throw new Error(r.error)
-  return r.data.records.map((rec) => ({ id: rec.recordId, data: rec.data as unknown as T }))
+  return r.data.records.map((rec) => ({ id: rec.recordId, createdAt: rec.createdAt, data: rec.data as unknown as T }))
 }
+
+const isDuplicate = (error: string) => /duplicate/i.test(error)
 
 /** Score one round. Pure given its inputs; exported for unit tests. */
 export function scoreRound(hand: number[], playerIds: string[], picks: Pick[], locks: Lock[]): RoundResults {
@@ -87,19 +89,67 @@ export function scoreRound(hand: number[], playerIds: string[], picks: Pick[], l
   }
 }
 
-/** Reveal if allowed (deadline passed or everyone locked). Idempotent. */
-async function tryReveal(tools: ActionTools, roundId: string, now: number): Promise<ActionResult<{ revealed: boolean }>> {
+async function revealClaim(tools: ActionTools, roundId: string) {
+  return (await queryData<{ results: RoundResults }>(tools, 'reveals', { roundId }))[0] ?? null
+}
+
+/**
+ * Reveal if allowed: deadline passed, or every player has BOTH a lock and a pick.
+ * The first caller to insert the `reveals` row (uniqueOn roundId) fixes the results;
+ * every other caller copies those, so concurrent reveals can't write different results.
+ */
+async function tryReveal(tools: ActionTools, roundId: string): Promise<ActionResult<{ revealed: boolean }>> {
   const round = await getData<Round>(tools, 'rounds', roundId)
   if (!round) return fail('Round not found')
   if (round.status === 'revealed') return { success: true, data: { revealed: true } }
-  const locks = (await queryData<Lock>(tools, 'locks', { roundId })).map((l) => l.data)
-  const allLocked = round.playerIds.every((id) => locks.some((l) => l.userId === id))
-  if (!allLocked && now < round.deadline) return { success: true, data: { revealed: false } }
-  const picks = (await queryData<Pick>(tools, 'picks', { roundId })).map((p) => p.data)
-  const results = scoreRound(round.hand, round.playerIds, picks, locks)
+  let results = (await revealClaim(tools, roundId))?.data.results
+  if (!results) {
+    const locks = (await queryData<Lock>(tools, 'locks', { roundId })).map((l) => l.data)
+    const picks = (await queryData<Pick>(tools, 'picks', { roundId })).map((p) => p.data)
+    const allIn = round.playerIds.every((id) => locks.some((l) => l.userId === id) && picks.some((p) => p.userId === id))
+    if (!allIn && Date.now() < round.deadline) return { success: true, data: { revealed: false } }
+    const computed = scoreRound(round.hand, round.playerIds, picks, locks)
+    const claim = await tools.create('reveals', { roundId, results: computed })
+    if (claim.success) results = computed
+    else {
+      const winner = await revealClaim(tools, roundId)
+      if (!winner) return claim
+      results = winner.data.results
+    }
+  }
   const w = await tools.update('rounds', roundId, { status: 'revealed', results })
   if (!w.success) return w
   return { success: true, data: { revealed: true } }
+}
+
+type Member = { roomId: string; userId: string }
+
+/** Members in join order (createdAt, then recordId). The first MAX_PLAYERS are in the room. */
+async function rankedMembers(tools: ActionTools, roomId: string) {
+  const rows = await queryData<Member>(tools, 'members', { roomId })
+  return rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+}
+
+/** Rooms created before member rows existed: seed rows from playerIds once (duplicates are refused). */
+async function backfillMembers(tools: ActionTools, room: { id: string; data: Room }) {
+  if ((await rankedMembers(tools, room.id)).length) return
+  for (const id of room.data.playerIds) await tools.create('members', { roomId: room.id, userId: id })
+}
+
+/**
+ * Rewrite rooms.playerIds from the member rows until they agree. Member rows only change by
+ * insert or by a rank-5+ row backing out, so a stale write is always followed by its writer's
+ * own re-check, which repairs it.
+ */
+async function syncPlayerIds(tools: ActionTools, roomId: string): Promise<string[]> {
+  for (let i = 0; i < 5; i++) {
+    const want = (await rankedMembers(tools, roomId)).slice(0, MAX_PLAYERS).map((m) => m.data.userId)
+    const room = await getData<Room>(tools, 'rooms', roomId)
+    if (!room) throw new Error('Room vanished')
+    if (room.playerIds.join() === want.join()) return want
+    await tools.update('rooms', roomId, { playerIds: want })
+  }
+  throw new Error('Room is busy, try again')
 }
 
 async function findRoomByCode(tools: ActionTools, code: string) {
@@ -113,7 +163,10 @@ export const actions: Record<string, ActionHandler<Env>> = {
       const code = makeCode()
       if (await findRoomByCode(tools, code)) continue
       const r = await tools.create('rooms', { code, hostId: userId, playerIds: [userId] })
-      if (r.success) return { success: true, data: { code } }
+      if (!r.success) continue
+      const m = await tools.create('members', { roomId: r.data.recordId, userId })
+      if (!m.success) return m
+      return { success: true, data: { code } }
     }
     return fail('Could not allocate a room code, try again')
   },
@@ -121,25 +174,26 @@ export const actions: Record<string, ActionHandler<Env>> = {
   joinRoom: async ({ userId, params, tools }) => {
     const code = String(params.code ?? '').trim().toUpperCase()
     if (!/^[A-Z0-9]{5}$/.test(code)) return fail('Room codes are 5 letters/numbers')
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const room = await findRoomByCode(tools, code)
-      if (!room) return fail('No room with that code')
-      if (room.data.playerIds.includes(userId)) return { success: true, data: { code } }
-      if (room.data.playerIds.length >= MAX_PLAYERS) return fail('Room full')
-      const w = await tools.update('rooms', room.id, { playerIds: [...room.data.playerIds, userId] })
-      if (!w.success) return w
-      // shortcut: read-modify-write on playerIds, verified by re-reading. Concurrent joins can
-      // drop one id (we retry) or overshoot 4 (we back out). Upgrade to one row per player if that bites.
-      const after = await getData<Room>(tools, 'rooms', room.id)
-      if (!after) return fail('Room vanished')
-      if (!after.playerIds.includes(userId)) continue
-      if (after.playerIds.length > MAX_PLAYERS) {
-        await tools.update('rooms', room.id, { playerIds: after.playerIds.filter((id) => id !== userId) })
+    const room = await findRoomByCode(tools, code)
+    if (!room) return fail('No room with that code')
+    await backfillMembers(tools, room)
+    const before = await rankedMembers(tools, room.id)
+    if (!before.some((m) => m.data.userId === userId)) {
+      if (before.length >= MAX_PLAYERS) return fail('Room full')
+      // The insert is the atomic step (uniqueOn roomId+userId); a duplicate means we're already in.
+      const m = await tools.create('members', { roomId: room.id, userId })
+      if (!m.success && !isDuplicate(m.error)) return m
+      // Racing joins may all insert; join order decides who's in. Rank 5+ backs out.
+      const ranked = await rankedMembers(tools, room.id)
+      const rank = ranked.findIndex((r) => r.data.userId === userId)
+      if (rank >= MAX_PLAYERS) {
+        await tools.remove('members', ranked[rank].id)
+        await syncPlayerIds(tools, room.id)
         return fail('Room full')
       }
-      return { success: true, data: { code } }
     }
-    return fail('Room is busy, try again')
+    await syncPlayerIds(tools, room.id)
+    return { success: true, data: { code } }
   },
 
   startRound: async ({ userId, params, tools }) => {
@@ -147,12 +201,14 @@ export const actions: Record<string, ActionHandler<Env>> = {
     const room = await findRoomByCode(tools, code)
     if (!room) return fail('Room not found')
     if (room.data.hostId !== userId) return fail('Only the host can start a round')
-    if (room.data.playerIds.length < 2) return fail('Need at least 2 players')
+    await backfillMembers(tools, room)
+    const playerIds = await syncPlayerIds(tools, room.id)
+    if (playerIds.length < 2) return fail('Need at least 2 players')
     const now = Date.now()
     const rounds = await queryData<Round>(tools, 'rounds', { roomId: room.id })
     // Unstick rounds abandoned before their timer ran out.
     for (const r of rounds.filter((r) => r.data.status === 'picking')) {
-      const res = await tryReveal(tools, r.id, now)
+      const res = await tryReveal(tools, r.id)
       if (!res.success) return res
       if (!res.data.revealed) return fail('A round is still in progress')
     }
@@ -164,7 +220,7 @@ export const actions: Record<string, ActionHandler<Env>> = {
       startedAt: now,
       deadline: now + ROUND_MS,
       status: 'picking',
-      playerIds: room.data.playerIds,
+      playerIds,
     }
     const w = await tools.create('rounds', round as unknown as Record<string, unknown>)
     if (!w.success) return w
@@ -181,17 +237,28 @@ export const actions: Record<string, ActionHandler<Env>> = {
     const now = Date.now()
     if (now >= round.deadline) return fail('Time is up')
     if (!Number.isInteger(tile) || !round.hand.includes(tile)) return fail('That tile is not in the hand')
-    const existing = await queryData<Lock>(tools, 'locks', { roundId, userId })
-    if (existing.length) return fail('Already locked in')
-    // Pick first: if the lock write then fails, a retry overwrites this pick.
-    const prior = await queryData<Pick>(tools, 'picks', { roundId, userId })
-    const p = prior.length
-      ? await tools.update('picks', prior[0].id, { tile })
-      : await tools.create('picks', { roundId, userId, tile })
-    if (!p.success) return p
+    // The lock row is the gate (uniqueOn roundId+userId): a second concurrent lockIn fails
+    // here before it can touch the pick.
     const l = await tools.create('locks', { roundId, userId, lockedAt: now, playerIds: round.playerIds })
-    if (!l.success) return l
-    await tryReveal(tools, roundId, now)
+    if (!l.success) return fail(isDuplicate(l.error) ? 'Already locked in' : l.error)
+    const undo = async () => {
+      await tools.deleteWhere('picks', { roundId, userId })
+      await tools.remove('locks', l.data.recordId)
+    }
+    const p = await tools.create('picks', { roundId, userId, tile })
+    if (!p.success) {
+      await undo()
+      return p
+    }
+    await tryReveal(tools, roundId)
+    // A reveal that started before our rows existed won't count this pick. Undo so that a
+    // successful lockIn always means the pick was scored.
+    const claim = await revealClaim(tools, roundId)
+    const mine = claim?.data.results.players.find((r) => r.userId === userId)
+    if (claim && (!mine || mine.tile === null)) {
+      await undo()
+      return fail('Time is up')
+    }
     return { success: true, data: { locked: true } }
   },
 
@@ -199,6 +266,6 @@ export const actions: Record<string, ActionHandler<Env>> = {
     const roundId = String(params.roundId ?? '')
     const round = await getData<Round>(tools, 'rounds', roundId)
     if (!round || !round.playerIds.includes(userId)) return fail('Round not found')
-    return tryReveal(tools, roundId, Date.now())
+    return tryReveal(tools, roundId)
   },
 }

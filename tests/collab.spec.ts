@@ -211,3 +211,116 @@ test('timer expiry reveals the round with "no pick" for a player who never locke
   await expect(b.page.getByTestId(`result-${b.userId}`)).toHaveAttribute('data-tile', '')
   await expect(b.page.getByTestId(`result-${b.userId}`)).toContainText('no pick')
 })
+
+// ── Race conditions (fired as real concurrent requests at the worker) ──────
+
+type Result = { success: boolean; data?: Record<string, unknown>; error?: string }
+
+/** Call a server action from a signed-in page, using the SDK's own token route. */
+async function act(page: Page, name: string, params: Record<string, unknown> = {}): Promise<Result> {
+  return page.evaluate(
+    async ({ name, params }) => {
+      const { token } = await (await fetch('/api/auth/token', { method: 'POST', credentials: 'include' })).json()
+      const res = await fetch(`/api/actions/${name}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(params),
+      })
+      return res.json()
+    },
+    { name, params },
+  )
+}
+
+const ROUNDS_OF_RACING = 3
+
+const tileIndex = (name: string) => 'mpsz'.indexOf(name[1]) * 9 + Number(name[0]) - 1
+
+async function openAll(us: Array<{ page: Page }>) {
+  await Promise.all(us.map((u) => u.page.goto('/home')))
+}
+
+test('concurrent joins: nobody is silently dropped', async ({ users }) => {
+  test.skip(loadAllTestAccounts().length < 4, 'needs 4 test accounts')
+  test.setTimeout(120_000)
+  const us = await users(4)
+  await openAll(us)
+  // shortcut: the local dev server did not reproduce the old join race even over 8 repeats, so these
+  // check the new behaviour rather than catch the old bug. A load test on production would.
+  for (let i = 0; i < ROUNDS_OF_RACING; i++) {
+    const code = (await act(us[0].page, 'createRoom')).data!.code as string
+    const joins = await Promise.all(us.slice(1).map((u) => act(u.page, 'joinRoom', { code })))
+    expect(joins.map((j) => j.success)).toEqual([true, true, true])
+    await us[0].page.goto(`/room/${code}`)
+    await expect(us[0].page.getByTestId('players').locator('li'), `attempt ${i}`).toHaveCount(4, { timeout: 15_000 })
+  }
+})
+
+test('two players racing for the last seat: exactly one gets it', async ({ users }) => {
+  test.skip(loadAllTestAccounts().length < 5, 'needs 5 test accounts')
+  test.setTimeout(120_000)
+  const us = await users(5)
+  await openAll(us)
+  for (let i = 0; i < ROUNDS_OF_RACING; i++) {
+    const code = (await act(us[0].page, 'createRoom')).data!.code as string
+    expect((await act(us[1].page, 'joinRoom', { code })).success).toBe(true)
+    expect((await act(us[2].page, 'joinRoom', { code })).success).toBe(true)
+    const [d, e] = await Promise.all([act(us[3].page, 'joinRoom', { code }), act(us[4].page, 'joinRoom', { code })])
+    expect([d.success, e.success].filter(Boolean), `attempt ${i}`).toHaveLength(1)
+    expect([d, e].find((r) => !r.success)?.error).toBe('Room full')
+    await us[0].page.goto(`/room/${code}`)
+    await expect(us[0].page.getByTestId('players').locator('li'), `attempt ${i}`).toHaveCount(4, { timeout: 15_000 })
+    // Whoever won the seat must actually be listed.
+    const winner = d.success ? us[3] : us[4]
+    await expect(us[0].page.getByTestId(`score-${winner.userId}`), `attempt ${i}`).toBeVisible()
+  }
+})
+
+test('double lock-in: one request wins and its tile is the one scored', async ({ users }) => {
+  const [a, b] = await users(2)
+  await openAll([a, b])
+  const code = (await act(a.page, 'createRoom')).data!.code as string
+  expect((await act(b.page, 'joinRoom', { code })).success).toBe(true)
+  const roundId = (await act(a.page, 'startRound', { code })).data!.roundId as string
+  await a.page.goto(`/room/${code}`)
+  await expect(a.page.getByTestId('hand').locator('button')).toHaveCount(14, { timeout: 15_000 })
+  const names = await a.page.getByTestId('hand').locator('button').evaluateAll((els) => els.map((e) => e.getAttribute('data-tile')!))
+  const [x, y] = [...new Set(names)]
+
+  const [rx, ry] = await Promise.all([
+    act(a.page, 'lockIn', { roundId, tile: tileIndex(x) }),
+    act(a.page, 'lockIn', { roundId, tile: tileIndex(y) }),
+  ])
+  expect([rx.success, ry.success].filter(Boolean)).toHaveLength(1)
+  expect([rx, ry].find((r) => !r.success)?.error).toBe('Already locked in')
+  const winner = rx.success ? x : y
+
+  expect((await act(b.page, 'lockIn', { roundId, tile: tileIndex(names[0]) })).success).toBe(true)
+  await expect(a.page.getByTestId('reveal')).toBeVisible({ timeout: 15_000 })
+  await expect(a.page.getByTestId(`result-${a.userId}`)).toHaveAttribute('data-tile', winner)
+})
+
+test('lock-in racing the deadline reveal: success always means the pick was scored', async ({ users }) => {
+  test.setTimeout(90_000)
+  const [a, b] = await users(2)
+  await openAll([a, b])
+  const code = (await act(a.page, 'createRoom')).data!.code as string
+  expect((await act(b.page, 'joinRoom', { code })).success).toBe(true)
+  const startedAt = Date.now()
+  const roundId = (await act(a.page, 'startRound', { code })).data!.roundId as string
+  await b.page.goto(`/room/${code}`)
+  const bTile = (await b.page.getByTestId('hand').locator('button').first().getAttribute('data-tile'))!
+
+  // Fire B's lock-in and a burst of reveals right at the deadline.
+  await b.page.waitForTimeout(Math.max(0, startedAt + 30_000 - Date.now() - 40))
+  const [lock] = await Promise.all([
+    act(b.page, 'lockIn', { roundId, tile: tileIndex(bTile) }),
+    ...Array.from({ length: 3 }, () => act(a.page, 'revealRound', { roundId })),
+  ])
+  await expect(b.page.getByTestId('reveal')).toBeVisible({ timeout: 15_000 })
+  const shown = await b.page.getByTestId(`result-${b.userId}`).getAttribute('data-tile')
+  // Either outcome is fine; disagreement is the bug.
+  expect(shown).toBe(lock.success ? bTile : '')
+  if (!lock.success) expect(lock.error).toBe('Time is up')
+  console.log(`deadline race outcome: lockIn ${lock.success ? 'counted' : `refused (${lock.error})`}`)
+})
