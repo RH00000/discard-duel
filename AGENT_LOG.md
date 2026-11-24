@@ -126,3 +126,49 @@
   - the lobby dots
   - that the lock badges appear without revealing picks
   - the reveal table and running scores
+
+## 2026-11-24 — Independent privacy review (fresh subagent, read-only)
+**Did**
+- Started a general-purpose subagent with no session context. It was given only the goal ("find any way a player can read another's pick before reveal"), the attack areas (direct reads, sync subscriptions, API/actions, timer and race edge cases, roles), the file list, and read-only rules.
+- It checked behaviour against the compiled SDK that is actually installed (`node_modules/deepspace/dist/worker.js`, 0.44.2). It changed no files and made no requests to the live site.
+- No fixes applied yet; waiting for the user.
+
+**Result: no CRITICAL or HIGH findings.** No path found for a player, non-player, anonymous visitor or admin to read another player's pick before the reveal.
+
+**Findings**
+1. **LOW, confirmed. `joinRoom` can silently drop a player** (`src/actions/index.ts:120-141`).
+   - Two joins race into a 3-player room. X writes and re-reads before Y's stale write lands, so X gets "success" and is then overwritten out of the room.
+   - The ">4 back-out" branch is dead code: a writer only adds one id to a list it just read as under 4.
+   - **This corrects my earlier "Known limitations" entry**, which said a lost id is retried and an overshoot is backed out. The retry only catches losses that happen before your own re-read. I checked the code and agree.
+   - No effect on picks.
+   - Fix: one membership row per player, with `uniqueOn`.
+2. **LOW, confirmed. The reveal is not atomic** (`tryReveal`, lines 91-103).
+   - Two reveals running at once can both compute results, and the last write wins.
+   - Picks still can't be changed after a reveal: `lockIn` re-checks `status === 'picking'` on the server.
+   - Fix: re-check the status just before writing, or use a unique reveal row so only the first reveal takes effect.
+3. **LOW/INFO, confirmed. Two simultaneous `lockIn` calls from the same user** can leave the stored pick as tile Y while the lock time came from tile X's request. Nothing about other players is learned.
+   - Fix: create the lock row first and let its `uniqueOn` be the gate, then write the pick.
+4. **INFO. The app owner can always see picks** if `ALLOW_DEBUG_ROUTES=true` is ever set in production, because the admin SQL debug route bypasses RBAC. It's off by default. The owner can also deploy any code. Keep `ALLOW_DEBUG_ROUTES` unset in production.
+5. **INFO. Two oracles that never reveal a tile.**
+   - Writing to a known pick recordId reveals whether a guessed `roundId`/`userId` matches, because the immutable-field check runs before RBAC.
+   - `records.get` via the agent tools tells "exists" apart from "not found".
+   - Both need a pick's recordId, which is random and never sent to other players. `tile` is never exposed.
+6. **INFO. Actions check the JWT, not app role or room approval.**
+   - A user demoted to viewer can still create and join rooms.
+   - Room codes can be probed via error messages.
+   - Anyone with a code can fill a room.
+7. **INFO. Dead UI.** A mid-round joiner is not in `round.playerIds`, so they can't read the current round, and the "You joined mid-round" text never shows. They see the lobby until the next round.
+
+**Checked and found safe** (summary)
+- **`picks`:** `'own'` is applied as a server-side SQL owner filter before any client `where`, `orderBy` or `limit`. Live updates are only sent to sockets that pass `canRead`. Admin is `'own'` too.
+- **Pick ownership:** `ownerField` + `userBound` + `immutable`, and the only writer is `lockIn`, using the verified caller id.
+- **`rounds` / `locks` / `rooms`:** no pick data before reveal.
+- **Forcing an early reveal:** the deadline lives on the server, "all locked" needs one lock row per snapshot player, and only the caller can create theirs.
+- **`revealRound` / `lockIn` errors:** carry no pick data.
+- **A client-sent `X-App-Action` header:** ignored on WebSocket paths.
+- **Agent tools:** run as the caller with RBAC.
+- **Other DO scopes, presence, Yjs, proxies:** carry no game data. The selected tile stays in React state until lock-in.
+
+**Needs a human**
+- Decide which of findings 1–3 (and optionally 6–7) to fix.
+- Confirm `ALLOW_DEBUG_ROUTES` is never set in production.
