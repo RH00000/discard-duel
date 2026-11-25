@@ -6,6 +6,7 @@
 import type { ActionHandler, ActionResult, ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker'
 import { bestDiscards, discardOptions } from '../lib/shanten'
+import { GAME_LENGTHS, isGameOver, lengthOfGame, roomGame, roundsInGame } from '../lib/game'
 import type { Lock, Pick, PlayerResult, Room, Round, RoundResults } from '../schemas/game-schema'
 
 export const MAX_PLAYERS = 4
@@ -49,7 +50,8 @@ async function getData<T>(tools: ActionTools, coll: string, id: string): Promise
 }
 
 async function queryData<T>(tools: ActionTools, coll: string, where: Record<string, unknown>) {
-  const r = await tools.query(coll, { where, limit: 100 })
+  // No limit: action queries are unbounded, and a capped page would undercount a long-lived room's rounds.
+  const r = await tools.query(coll, { where })
   if (!r.success) throw new Error(r.error)
   return r.data.records.map((rec) => ({ id: rec.recordId, createdAt: rec.createdAt, data: rec.data as unknown as T }))
 }
@@ -251,7 +253,13 @@ export const actions: Record<string, ActionHandler<Env>> = {
       if (!res.success) return res
       if (!res.data.revealed) return fail('A round is still in progress')
     }
-    const number = rounds.reduce((n, r) => Math.max(n, r.data.number), 0) + 1
+    // Re-read: the sweep above may have just revealed some of these.
+    const all = (await queryData<Round>(tools, 'rounds', { roomId: room.id })).map((r) => r.data)
+    const game = roomGame(room.data)
+    const gameRounds = roundsInGame(all, game)
+    const gameLength = lengthOfGame(gameRounds, room.data)
+    if (gameRounds.length >= gameLength) return fail('This game is over. Start a new game')
+    const number = all.reduce((n, r) => Math.max(n, r.number), 0) + 1
     const round: Round = {
       roomId: room.id,
       number,
@@ -260,10 +268,40 @@ export const actions: Record<string, ActionHandler<Env>> = {
       deadline: now + ROUND_MS,
       status: 'picking',
       playerIds,
+      game,
+      gameRound: gameRounds.length + 1,
+      gameLength,
     }
     const w = await tools.create('rounds', round as unknown as Record<string, unknown>)
     if (!w.success) return w
     return { success: true, data: { roundId: w.data.recordId } }
+  },
+
+  setGameLength: async ({ userId, params, tools }) => {
+    const room = await findRoomByCode(tools, String(params.code ?? ''))
+    if (!room || !room.data.playerIds.includes(userId)) return fail('Room not found')
+    if (room.data.hostId !== userId) return fail('Only the host can set the game length')
+    const length = Number(params.length)
+    if (!(GAME_LENGTHS as readonly number[]).includes(length)) return fail(`Game length must be ${GAME_LENGTHS.join(', ')}`)
+    const rounds = (await queryData<Round>(tools, 'rounds', { roomId: room.id })).map((r) => r.data)
+    // A round started at this same moment keeps the length it copied, so this check can't change a running game.
+    if (roundsInGame(rounds, roomGame(room.data)).length) return fail('Game length is locked once the game starts')
+    const w = await tools.update('rooms', room.id, { gameLength: length })
+    if (!w.success) return w
+    return { success: true, data: { gameLength: length } }
+  },
+
+  newGame: async ({ userId, params, tools }) => {
+    const room = await findRoomByCode(tools, String(params.code ?? ''))
+    if (!room || !room.data.playerIds.includes(userId)) return fail('Room not found')
+    if (room.data.hostId !== userId) return fail('Only the host can start a new game')
+    const game = roomGame(room.data)
+    const rounds = (await queryData<Round>(tools, 'rounds', { roomId: room.id })).map((r) => r.data)
+    if (!isGameOver(roundsInGame(rounds, game), room.data)) return fail('The game is not over yet')
+    // Absolute write: a double click writes the same value. Old rounds stay, tagged with their game.
+    const w = await tools.update('rooms', room.id, { game: game + 1 })
+    if (!w.success) return w
+    return { success: true, data: { game: game + 1 } }
   },
 
   lockIn: async ({ userId, params, tools }) => {

@@ -18,7 +18,7 @@ test.describe('API tests', () => {
 })
 
 test.describe('game actions', () => {
-  for (const name of ['createRoom', 'joinRoom', 'startRound', 'lockIn', 'revealRound', 'leaveRoom', 'deleteRoom']) {
+  for (const name of ['createRoom', 'joinRoom', 'startRound', 'lockIn', 'revealRound', 'leaveRoom', 'deleteRoom', 'setGameLength', 'newGame']) {
     test(`${name} requires auth`, async ({ request }) => {
       const res = await request.post(`/api/actions/${name}`, { data: {} })
       expect(res.status()).toBe(401)

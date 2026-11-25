@@ -6,6 +6,7 @@ import { RemoveRoomButton } from '@/components/game/RemoveRoomButton'
 import { Tile } from '@/components/game/Tile'
 import { WhyPanel } from '@/components/game/WhyPanel'
 import { callAction } from '@/lib/call-action'
+import { GAME_LENGTHS, gameLengthOf, gameOf, gameRoundOf, isGameOver, lengthOfGame, roomGame, standings, totals as gameTotals } from '@/lib/game'
 import { tileName } from '@/lib/shanten'
 import { tileLabel } from '@/lib/tile-label'
 import type { Lock, Pick, Room, Round } from '@/schemas/game-schema'
@@ -75,16 +76,17 @@ function RoomView({ room }: { room: RecordData<Room> }) {
   const online = new Set([userId, ...peers.map((p) => p.userId)])
 
   const { records: rounds } = useQuery<Round>('rounds', { where: { roomId: room.recordId } })
-  const current = useMemo(
-    () => rounds.reduce<RecordData<Round> | undefined>((a, r) => (!a || r.data.number > a.data.number ? r : a), undefined),
-    [rounds],
+  // Only the current game counts: earlier games' rounds stay stored but don't add to these totals.
+  const game = roomGame(room.data)
+  const gameRounds = useMemo(
+    () => rounds.filter((r) => gameOf(r.data) === game).sort((a, b) => a.data.number - b.data.number),
+    [rounds, game],
   )
+  const gameData = useMemo(() => gameRounds.map((r) => r.data), [gameRounds])
+  const current = gameRounds[gameRounds.length - 1]
+  const over = isGameOver(gameData, room.data)
   const isHost = room.data.hostId === userId
-  const totals = useMemo(() => {
-    const t = new Map<string, number>()
-    for (const r of rounds) for (const p of r.data.results?.players ?? []) t.set(p.userId, (t.get(p.userId) ?? 0) + p.points)
-    return t
-  }, [rounds])
+  const totals = useMemo(() => gameTotals(gameData), [gameData])
 
   const [starting, setStarting] = useState(false)
   async function start() {
@@ -121,9 +123,9 @@ function RoomView({ room }: { room: RecordData<Room> }) {
             <RemoveRoomButton room={room} userId={userId} onDone={() => navigate('/play')} />
           </div>
         </div>
-        {isHost && current?.data.status !== 'picking' && (
+        {isHost && !over && current?.data.status !== 'picking' && (
           <Button data-testid="start-round" onClick={start} loading={starting} disabled={room.data.playerIds.length < 2}>
-            {current ? 'Next round' : 'Start round'}
+            {current ? 'Next round' : 'Start game'}
           </Button>
         )}
       </header>
@@ -147,6 +149,8 @@ function RoomView({ room }: { room: RecordData<Room> }) {
         )}
       </section>
 
+      {!current && <GameLengthPicker room={room} isHost={isHost} />}
+      {over && <GameOverView room={room} gameData={gameData} isHost={isHost} name={name} />}
       {current &&
         (current.data.status === 'picking' ? (
           <PickingView key={current.recordId} round={current} userId={userId!} name={name} />
@@ -155,6 +159,123 @@ function RoomView({ room }: { room: RecordData<Room> }) {
         ))}
       {current && <PickOwnersMarker roundId={current.recordId} />}
     </div>
+  )
+}
+
+function RoundOf({ round }: { round: Round }) {
+  return <span data-testid="round-of">Round {gameRoundOf(round)} of {gameLengthOf(round)}</span>
+}
+
+/** Before round 1: the host picks 5/7/10; everyone sees the choice live through the room record. */
+function GameLengthPicker({ room, isHost }: { room: RecordData<Room>; isHost: boolean }) {
+  const { error } = useToast()
+  const length = lengthOfGame([], room.data)
+  const [busy, setBusy] = useState<number | null>(null)
+  async function choose(n: number) {
+    setBusy(n)
+    try {
+      await callAction('setGameLength', { code: room.data.code, length: n })
+    } catch (e) {
+      error('Could not set game length', (e as Error).message)
+    } finally {
+      setBusy(null)
+    }
+  }
+  return (
+    <section aria-label="Game length" className="flex flex-wrap items-center gap-3">
+      <p className="text-sm">
+        Game length: <span className="font-semibold" data-testid="game-length">{length} rounds</span>
+      </p>
+      {isHost ? (
+        <div className="flex gap-1" role="group" aria-label="Choose game length">
+          {GAME_LENGTHS.map((n) => (
+            <Button
+              key={n}
+              size="sm"
+              variant={n === length ? 'default' : 'outline'}
+              aria-pressed={n === length}
+              data-testid={`game-length-${n}`}
+              loading={busy === n}
+              disabled={busy !== null}
+              onClick={() => n !== length && void choose(n)}
+            >
+              {n}
+            </Button>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">The host picks the length before the game starts.</p>
+      )}
+    </section>
+  )
+}
+
+/** Final standings after the last round's reveal. Ties share a rank; every rank-1 player is a winner. */
+function GameOverView({
+  room,
+  gameData,
+  isHost,
+  name,
+}: {
+  room: RecordData<Room>
+  gameData: Round[]
+  isHost: boolean
+  name: (id: string) => string
+}) {
+  const { error } = useToast()
+  const [busy, setBusy] = useState(false)
+  const rows = standings(gameData)
+  const winners = rows.filter((r) => r.winner)
+  async function newGame() {
+    setBusy(true)
+    try {
+      await callAction('newGame', { code: room.data.code })
+    } catch (e) {
+      error('Could not start a new game', (e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="flex flex-col gap-4 rounded-xl border-2 border-amber-400/70 p-4 sm:p-6" data-testid="game-over" aria-label="Game over">
+      <div>
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">Game over · {gameData.length} rounds</p>
+        <h2 className="text-2xl font-semibold" data-testid="winner-title">
+          {winners.length > 1 ? 'Co-winners: ' : 'Winner: '}
+          {winners.map((w) => name(w.userId)).join(' & ')}
+        </h2>
+      </div>
+      <table className="w-full text-left text-sm">
+        <thead className="text-muted-foreground">
+          <tr><th className="py-1">#</th><th>Player</th><th className="text-right">Optimal picks</th><th className="text-right">Points</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.userId} className={cn('border-t', r.winner && 'bg-amber-400/10')} data-testid={`standing-${r.userId}`}>
+              <td className="py-2 pl-1 font-mono">{r.rank}</td>
+              <td>
+                {name(r.userId)}
+                {!room.data.playerIds.includes(r.userId) && <span className="text-muted-foreground"> (left)</span>}
+                {r.winner && (
+                  <Badge className="ml-2 bg-amber-400 text-stone-900 hover:bg-amber-400" data-testid={`winner-${r.userId}`}>
+                    Winner
+                  </Badge>
+                )}
+              </td>
+              <td className="text-right font-mono" data-testid={`optimal-${r.userId}`}>{r.optimalPicks}</td>
+              <td className="pr-1 text-right font-mono font-semibold">{r.points}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {isHost ? (
+        <Button className="self-start" data-testid="new-game" loading={busy} onClick={() => void newGame()}>
+          New game
+        </Button>
+      ) : (
+        <p className="text-sm text-muted-foreground" data-testid="waiting-for-host">Waiting for host to start a new game</p>
+      )}
+    </section>
   )
 }
 
@@ -203,7 +324,7 @@ function PickingView({ round, userId, name }: { round: RecordData<Round>; userId
   return (
     <section className="flex flex-col gap-6" aria-label={`Round ${round.data.number}`}>
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Round {round.data.number}: pick a discard</h2>
+        <h2 className="text-lg font-semibold"><RoundOf round={round.data} />: pick a discard</h2>
         <span className={cn('font-mono text-2xl tabular-nums', remaining <= 5 && 'text-destructive')} data-testid="timer">
           {remaining}s
         </span>
@@ -262,7 +383,7 @@ function RevealView({
   const b = results.best[0]
   return (
     <section className="flex flex-col gap-6" aria-label={`Round ${round.data.number} results`} data-testid="reveal">
-      <h2 className="text-lg font-semibold">Round {round.data.number}: results</h2>
+      <h2 className="text-lg font-semibold"><RoundOf round={round.data} />: results</h2>
       <div className="rounded-xl bg-emerald-900 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.08),transparent_70%)] p-2 pt-3 shadow-inner sm:p-4">
         <div className="mx-auto grid max-w-xs grid-cols-7 gap-1 md:flex md:max-w-none">
           {round.data.hand.map((t, i) => <Tile key={i} tile={t} best={bestTiles.has(t)} />)}

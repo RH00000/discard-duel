@@ -16,5 +16,6 @@
 - **LiveKit (audio/video):** a 30-second silent puzzle doesn't need voice; players can use any call app alongside.
 
 ## Smaller calls (details in AGENT_LOG.md)
+- **Game length / New game:** stored on server-written fields (`rooms.gameLength`, `rooms.game`; each round copies its game, N and M). New game bumps the game number instead of deleting rounds, so old results and "Why?" explanations survive and only the current game is summed.
 - **Cron / scheduled jobs:** skipped. The 30s timer is enforced on the server at lock-in and reveal time, so no scheduler is needed.
 - **Yjs / canvas / messaging:** skipped; there's no shared document, drawing or chat in scope.

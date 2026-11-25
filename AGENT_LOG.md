@@ -355,3 +355,49 @@ User hand-checked check 7: the join prompt works by link, and a fifth account is
 - The phone e2e test now checks, at 375px, two rows with 7 tiles in the first, nothing past the screen edge, and tiles at least 36px wide. At 1100px it checks one row inside the felt panel.
 - `PHONE_SCREENSHOT=<path>` saves the phone view.
 - Results: vitest 20/20, e2e 29/29.
+
+## 2026-11-24: game length + winner screen
+Plan approved as proposed: `C:\Users\richa\.claude\plans\binary-chasing-parnas-...md`.
+
+**Data model** (no permission changes). Checked docs.deep.space first ("What changes are safe"): adding a field is an automatic `ALTER TABLE ADD COLUMN`, and old records read it as empty.
+- `rooms` gains `gameLength` and `game`.
+- `rounds` gains `game`, `gameRound` and `gameLength`.
+- Both collections already deny every client write, so only actions set these fields.
+- **Defaults for old data:** length 7, game 1, and N = `number`.
+
+**`src/lib/game.ts`** (pure) holds the defaults, `roundsInGame`, `lengthOfGame`, `isGameOver`, `totals` and `standings`. Standings rank by points, and equal points share a rank (1, 1, 3); every rank-1 player is a winner.
+
+**Server actions:**
+- `setGameLength`: host only; length must be 5, 7 or 10; refused once the current game has a round.
+- `startRound`: refuses once the game has M rounds ("This game is over"), and stamps game, N and M on the new round.
+- `newGame`: host only; only when M rounds exist and the last is revealed; it bumps `rooms.game`.
+- M is copied onto each round when it starts, so a length change racing round 1 can't alter a game already running.
+
+**Fixed along the way:** `queryData` passed `limit: 100`. A room past 100 rounds (easy now that games repeat) would have reused a round `number`, which `uniqueOn` rejects, and miscounted its game. Action queries are unbounded when `limit` is omitted (worker.d.ts), so I removed it.
+
+**UI:**
+- lobby length picker: buttons for the host, live read-only text for everyone else
+- "Round N of M" headers
+- pill scores count the current game only
+- `GameOverView` above the final reveal: rank, "(left)", Winner/Co-winners badges, optimal picks, and New game (host) or "Waiting for host to start a new game" (others)
+- no Next round button once the game is over
+
+**Rejected alternatives:**
+- deleting rounds on New game (loses "Why?" history)
+- changing `uniqueOn` to (roomId, game, number) (an index change on live data)
+- a test-only short game (5 rounds through actions take seconds)
+- New game mid-game (a misclick would wipe a game)
+
+**Tests:**
+- unit `src/lib/game.test.ts` (4): ties and co-winners, missed picks, old rounds read as game 1, game over only after the last reveal
+- e2e, a 5-round game with 3 players:
+  - B sees the length change live
+  - C leaves after round 1
+  - "Round 2 of 5" shows on B's page
+  - after round 5: the winner screen, A's 5 optimal picks, and "(left)" on C
+  - refusals: `startRound` (game over), and B's `newGame` and `setGameLength` (host only)
+  - New game puts both screens' scores at 0
+  - game 2 ties, giving co-winners; C isn't listed
+- api.spec: 401 for both new actions
+- results: vitest 24/24; `npx deepspace test run e2e` 32/32
+- **Still for a human:** play a full 5-round game on the live site with two accounts; check that an existing room with rounds from before this change shows sensible standings (old rounds count as game 1, length 7).

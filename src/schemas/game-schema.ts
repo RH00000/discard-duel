@@ -23,6 +23,9 @@ export const roomsSchema: CollectionSchema = {
     { name: 'code', storage: 'text', interpretation: 'plain', required: true, immutable: true },
     { name: 'hostId', storage: 'text', interpretation: 'plain', required: true, immutable: true },
     { name: 'playerIds', storage: 'text', interpretation: json, required: true },
+    // Added later, so older rooms have neither: read through src/lib/game.ts defaults.
+    { name: 'gameLength', storage: 'number', interpretation: 'plain' },
+    { name: 'game', storage: 'number', interpretation: 'plain' },
   ],
   uniqueOn: ['code'],
   collaboratorsField: 'playerIds',
@@ -40,6 +43,10 @@ export const roundsSchema: CollectionSchema = {
     { name: 'status', storage: 'text', interpretation: { kind: 'select', options: ['picking', 'revealed'] }, required: true },
     { name: 'playerIds', storage: 'text', interpretation: json, required: true },
     { name: 'results', storage: 'text', interpretation: json },
+    // `number` stays the room-wide counter; these place the round in a game (empty on older rounds).
+    { name: 'game', storage: 'number', interpretation: 'plain' },
+    { name: 'gameRound', storage: 'number', interpretation: 'plain' },
+    { name: 'gameLength', storage: 'number', interpretation: 'plain' },
   ],
   uniqueOn: ['roomId', 'number'],
   collaboratorsField: 'playerIds',
@@ -118,7 +125,15 @@ export const gameSchemas = [
   roomsSchema, roundsSchema, locksSchema, picksSchema, membersSchema, revealsSchema, explanationsSchema,
 ]
 
-export interface Room { code: string; hostId: string; playerIds: string[] }
+export interface Room {
+  code: string
+  hostId: string
+  playerIds: string[]
+  /** Rounds per game the lobby shows; missing on older rooms (default 7). */
+  gameLength?: number | null
+  /** The room's current game; missing on older rooms (game 1). */
+  game?: number | null
+}
 export interface PlayerResult {
   userId: string
   tile: number | null
@@ -141,6 +156,12 @@ export interface Round {
   status: 'picking' | 'revealed'
   playerIds: string[]
   results?: RoundResults
+  /** Which game of the room this round belongs to (missing = 1). */
+  game?: number | null
+  /** N in "Round N of M" (missing = number). */
+  gameRound?: number | null
+  /** M, fixed when the round started (missing = 7). */
+  gameLength?: number | null
 }
 export interface Lock { roundId: string; userId: string; lockedAt: number; playerIds: string[] }
 export interface Pick { roundId: string; userId: string; tile: number }

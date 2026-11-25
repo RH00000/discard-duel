@@ -17,6 +17,7 @@
  */
 import type { Page } from '@playwright/test'
 import { test, expect, loadAllTestAccounts } from 'deepspace/testing'
+import { bestDiscards, discardOptions } from '../src/lib/shanten'
 
 // A machine that has never created test accounts is the normal state of a
 // fresh checkout, and there `users()` throws — turning "you have no pool yet"
@@ -502,4 +503,96 @@ test('a player who left mid-round is labelled "(left)" in the results table', as
   await expect(reveal.getByTestId(`result-${b.userId}`)).not.toContainText('(left)')
   await expect(reveal.getByTestId('best')).not.toContainText(/\d[mpsz]\b/) // display names, not 1z/2p codes
   if (process.env.REVEAL_SCREENSHOT) await a.page.screenshot({ path: process.env.REVEAL_SCREENSHOT, fullPage: true })
+})
+
+/**
+ * Start one round as the host and lock everyone in through actions (the round reveals as soon as the
+ * last player locks). `choose` gets the hand and its best discards, computed with the game's own engine.
+ */
+async function playRound(
+  host: Page,
+  code: string,
+  roomId: string,
+  players: Page[],
+  choose: (hand: number[], best: Set<number>) => number[],
+) {
+  const start = await act(host, 'startRound', { code })
+  expect(start.success, start.error).toBe(true)
+  const roundId = start.data!.roundId as string
+  const round = (await readRecords(host, { collection: 'rounds', where: { roomId } })).find((r) => r.recordId === roundId)!
+  const hand = round.data.hand as number[]
+  const counts = new Array<number>(34).fill(0)
+  for (const t of hand) counts[t]++
+  const best = new Set(bestDiscards(discardOptions(counts)).map((o) => o.discard))
+  const tiles = choose(hand, best)
+  // In order, so the first player is the fastest.
+  for (const [i, page] of players.entries()) {
+    const lock = await act(page, 'lockIn', { roundId, tile: tiles[i] })
+    expect(lock.success, lock.error).toBe(true)
+  }
+}
+
+test('a 5-round game: winner screen, no round 6, New game resets scores, then a tie shows co-winners', async ({ users }) => {
+  test.skip(loadAllTestAccounts().length < 3, 'needs 3 test accounts')
+  test.setTimeout(180_000)
+  const [a, b, c] = await users(3)
+  await openAll([a, b, c])
+  const code = (await act(a.page, 'createRoom')).data!.code as string
+  for (const u of [b, c]) expect((await act(u.page, 'joinRoom', { code })).success).toBe(true)
+  const roomId = (await readRecords(a.page, { collection: 'rooms', where: { code } }))[0].recordId
+  await a.page.setViewportSize({ width: 1100, height: 1000 })
+  await Promise.all([a.page.goto(`/room/${code}`), b.page.goto(`/room/${code}`)])
+
+  // The host picks the length; B sees it live. Default is 7.
+  await expect(b.page.getByTestId('game-length')).toHaveText('7 rounds', { timeout: 15_000 })
+  await expect(b.page.getByTestId('game-length-5')).toHaveCount(0) // not the host: read-only
+  await a.page.getByTestId('game-length-5').click()
+  await expect(b.page.getByTestId('game-length')).toHaveText('5 rounds', { timeout: 15_000 })
+
+  const nonBest = (hand: number[], best: Set<number>) => hand.find((t) => !best.has(t)) ?? hand[0]
+  const firstBest = (hand: number[], best: Set<number>) => hand.find((t) => best.has(t))!
+
+  // Game 1: A always picks a best discard, B never does. C plays round 1, then leaves mid-game.
+  await playRound(a.page, code, roomId, [a.page, b.page, c.page], (h, best) => [firstBest(h, best), nonBest(h, best), nonBest(h, best)])
+  expect((await act(c.page, 'leaveRoom', { code })).success).toBe(true)
+  expect((await act(a.page, 'setGameLength', { code, length: 10 })).error).toMatch(/locked/)
+  for (let n = 2; n <= 5; n++) {
+    await playRound(a.page, code, roomId, [a.page, b.page], (h, best) => [firstBest(h, best), nonBest(h, best)])
+    if (n === 2) await expect(b.page.getByTestId('round-of')).toHaveText('Round 2 of 5', { timeout: 15_000 })
+  }
+
+  for (const u of [a, b]) await expect(u.page.getByTestId('game-over')).toBeVisible({ timeout: 15_000 })
+  await expect(a.page.getByTestId(`winner-${a.userId}`)).toBeVisible()
+  await expect(a.page.getByTestId(`winner-${b.userId}`)).toHaveCount(0)
+  await expect(a.page.getByTestId('winner-title')).toHaveText(/^Winner: You$/)
+  await expect(a.page.getByTestId(`optimal-${a.userId}`)).toHaveText('5')
+  await expect(a.page.getByTestId(`standing-${c.userId}`)).toContainText('(left)')
+  await expect(a.page.getByTestId('start-round')).toHaveCount(0)
+
+  // Server-enforced, not just a hidden button.
+  expect((await act(a.page, 'startRound', { code })).error).toMatch(/game is over/)
+  expect((await act(b.page, 'newGame', { code })).error).toMatch(/Only the host/)
+  expect((await act(b.page, 'setGameLength', { code, length: 7 })).error).toMatch(/Only the host/)
+  await expect(b.page.getByTestId('waiting-for-host')).toBeVisible()
+  await expect(b.page.getByTestId('new-game')).toHaveCount(0)
+  if (process.env.WINNER_SCREENSHOT) await a.page.screenshot({ path: process.env.WINNER_SCREENSHOT, fullPage: true })
+
+  // New game: scores back to 0 on both screens, length picker back, old rounds no longer counted.
+  await a.page.getByTestId('new-game').click()
+  for (const u of [a, b]) {
+    await expect(u.page.getByTestId('game-over')).toHaveCount(0, { timeout: 15_000 })
+    for (const id of [a.userId, b.userId]) await expect(u.page.getByTestId(`score-${id}`)).toHaveText('0')
+    await expect(u.page.getByTestId('game-length')).toHaveText('5 rounds')
+  }
+  await expect(a.page.getByTestId('start-round')).toHaveText('Start game')
+
+  // Game 2: both pick the same non-best tile every round, so the points tie (no fastest bonus off-optimal).
+  for (let n = 1; n <= 5; n++) {
+    await playRound(a.page, code, roomId, [a.page, b.page], (h, best) => [nonBest(h, best), nonBest(h, best)])
+  }
+  await expect(a.page.getByTestId('game-over')).toBeVisible({ timeout: 15_000 })
+  for (const id of [a.userId, b.userId]) await expect(a.page.getByTestId(`winner-${id}`)).toBeVisible()
+  await expect(a.page.getByTestId('winner-title')).toContainText('Co-winners')
+  await expect(a.page.getByTestId(`standing-${c.userId}`)).toHaveCount(0) // game 1's players don't carry over
+  if (process.env.TIE_SCREENSHOT) await a.page.screenshot({ path: process.env.TIE_SCREENSHOT, fullPage: true })
 })
