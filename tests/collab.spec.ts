@@ -575,7 +575,14 @@ test('a 5-round game: winner screen, no round 6, New game resets scores, then a 
   expect((await act(b.page, 'setGameLength', { code, length: 7 })).error).toMatch(/Only the host/)
   await expect(b.page.getByTestId('waiting-for-host')).toBeVisible()
   await expect(b.page.getByTestId('new-game')).toHaveCount(0)
-  if (process.env.WINNER_SCREENSHOT) await a.page.screenshot({ path: process.env.WINNER_SCREENSHOT, fullPage: true })
+  // The loser's screen names the winner too.
+  await expect(b.page.getByTestId('winner-title')).toHaveText(/^Winner: (?!You)/)
+  await expect(b.page.getByTestId(`winner-${a.userId}`)).toBeVisible()
+  await expect(b.page.getByTestId(`winner-${b.userId}`)).toHaveCount(0)
+  if (process.env.WINNER_SCREENSHOT) {
+    await a.page.screenshot({ path: process.env.WINNER_SCREENSHOT, fullPage: true })
+    await b.page.screenshot({ path: process.env.WINNER_SCREENSHOT.replace(/\.png$/, '-loser.png'), fullPage: true })
+  }
 
   // New game: scores back to 0 on both screens, length picker back, old rounds no longer counted.
   await a.page.getByTestId('new-game').click()
@@ -591,8 +598,11 @@ test('a 5-round game: winner screen, no round 6, New game resets scores, then a 
     await playRound(a.page, code, roomId, [a.page, b.page], (h, best) => [nonBest(h, best), nonBest(h, best)])
   }
   await expect(a.page.getByTestId('game-over')).toBeVisible({ timeout: 15_000 })
-  for (const id of [a.userId, b.userId]) await expect(a.page.getByTestId(`winner-${id}`)).toBeVisible()
-  await expect(a.page.getByTestId('winner-title')).toContainText('Co-winners')
+  for (const u of [a, b]) {
+    await expect(u.page.getByTestId('game-over')).toBeVisible({ timeout: 15_000 })
+    for (const id of [a.userId, b.userId]) await expect(u.page.getByTestId(`winner-${id}`)).toBeVisible()
+    await expect(u.page.getByTestId('winner-title')).toContainText('Co-winners')
+  }
   await expect(a.page.getByTestId(`standing-${c.userId}`)).toHaveCount(0) // game 1's players don't carry over
   if (process.env.TIE_SCREENSHOT) await a.page.screenshot({ path: process.env.TIE_SCREENSHOT, fullPage: true })
 })

@@ -401,3 +401,11 @@ Plan approved as proposed: `C:\Users\richa\.claude\plans\binary-chasing-parnas-.
 - api.spec: 401 for both new actions
 - results: vitest 24/24; `npx deepspace test run e2e` 32/32
 - **Still for a human:** play a full 5-round game on the live site with two accounts; check that an existing room with rounds from before this change shows sensible standings (old rounds count as game 1, length 7).
+
+## Loser's screen didn't show the winner (report from live hand-check)
+- Report: after a game on the live site, only the winner's screen announced the winner; the other player saw just the final scores.
+- Checked: `GameOverView` renders for every player once the game is over (it depends only on shared round records), and the e2e test already asserted `game-over` on both screens but only checked the winner title/badges on the winner's page.
+- Changed `tests/collab.spec.ts`: the loser's page must now show "Winner: <name>" (not "You"), the Winner badge on the winner's row and none on its own; the tie check now runs on both screens; `WINNER_SCREENSHOT` also saves `<name>-loser.png`. Passes locally (32/32 suite earlier, this test re-run green).
+- No app code changed. Most likely cause: the other player's tab was loaded before the game-length deploy and was still running the old bundle (an open single-page app doesn't pick up a deploy until reloaded), which has no game-over screen and shows only scores.
+- Rejected: adding a deploy-version check that force-reloads stale tabs; not asked for, and a reload fixes it.
+- Needs a human: reload both devices and play a short (5-round) game on the live site; confirm the non-winner sees "Winner: <name>".
