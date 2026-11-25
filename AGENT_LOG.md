@@ -344,3 +344,14 @@ User hand-checked check 7: the join prompt works by link, and a fifth account is
   - New e2e test: three players; C locks in, then leaves; A and B lock in. C's row shows "(left)" and B's doesn't; the "Best discards" text has no `1z`-style codes. Set `REVEAL_SCREENSHOT=<path>` to save a screenshot.
   - The full-round test now expects the display name in "Locked in:".
   - Results: vitest 20/20, e2e 29/29.
+
+## 2026-11-24: phone hand layout, two rows of 7
+**Problem (from the user):** with all 14 tiles squeezed into one row, the tiles were cramped on a phone.
+**Fix:**
+- Below 768px (`md`) the hand is a 7-column grid, capped at `max-w-xs`, with tiles about 41×56px on a 375px screen. From `md` up it's one row of 44×64px tiles with a 4px gap.
+- Tablet widths (640–767px) use two rows too. A row of 14 at 44px is ~670px and would overflow the felt panel there.
+- **Rejected:** a free `flex-wrap`. At phone widths it wraps 6/6/2, which reads worse than 7/7.
+**Tests:**
+- The phone e2e test now checks, at 375px, two rows with 7 tiles in the first, nothing past the screen edge, and tiles at least 36px wide. At 1100px it checks one row inside the felt panel.
+- `PHONE_SCREENSHOT=<path>` saves the phone view.
+- Results: vitest 20/20, e2e 29/29.

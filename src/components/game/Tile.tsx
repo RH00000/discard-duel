@@ -30,7 +30,7 @@ export function Tile({ tile, selected, best, onClick, size = 'md' }: TileProps) 
       className={cn(
         // Off-white face with a thicker, darker bottom edge for depth.
         'inline-flex flex-col items-center justify-center rounded-md border border-stone-300 border-b-stone-400 bg-[#fbf8f1] font-semibold shadow-[0_2px_3px_rgba(0,0,0,0.3)] transition-transform',
-        size === 'md' ? 'h-12 w-full border-b-[5px] text-base sm:h-16 sm:w-11 sm:text-xl' : 'h-10 w-7 border-b-[3px] text-sm',
+        size === 'md' ? 'h-14 w-full border-b-[5px] text-lg md:h-16 md:w-11 md:text-xl' : 'h-10 w-7 border-b-[3px] text-sm',
         SUIT_STYLE[suit],
         onClick && 'cursor-pointer hover:-translate-y-0.5',
         selected && '-translate-y-1.5 ring-2 ring-primary hover:-translate-y-1.5',

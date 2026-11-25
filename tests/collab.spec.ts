@@ -263,7 +263,7 @@ test('full 2-player round: picks hidden until reveal, then visible and scored', 
   await expect(a.page.getByTestId(`score-${a.userId}`)).toHaveText(aScoreOnB!)
 })
 
-test('a player who leaves for /play can get back to the room from "Your rooms", and a phone shows the hand in one row', async ({ users }) => {
+test('a player who leaves for /play can get back to the room from "Your rooms", and a phone shows the hand in two rows of 7', async ({ users }) => {
   test.setTimeout(60_000)
   const { b } = await createAndJoin(users)
   const code = b.page.url().split('/').pop()!
@@ -274,10 +274,20 @@ test('a player who leaves for /play can get back to the room from "Your rooms", 
   await b.page.setViewportSize({ width: 375, height: 800 })
   const tiles = b.page.getByTestId('hand').locator('button')
   await expect(tiles).toHaveCount(14, { timeout: 15_000 })
-  const tops = await tiles.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)))
-  expect(new Set(tops).size).toBe(1)
-  const right = await tiles.last().evaluate((el) => el.getBoundingClientRect().right)
-  expect(right).toBeLessThanOrEqual(375)
+  const boxes = await tiles.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().toJSON() as DOMRect))
+  const rows = [...new Set(boxes.map((r) => Math.round(r.top)))]
+  expect(rows).toHaveLength(2) // two rows of 7 on a phone
+  expect(boxes.filter((r) => Math.round(r.top) === rows[0])).toHaveLength(7)
+  expect(Math.max(...boxes.map((r) => r.right))).toBeLessThanOrEqual(375)
+  expect(Math.min(...boxes.map((r) => r.width))).toBeGreaterThanOrEqual(36) // still easy to tap
+  if (process.env.PHONE_SCREENSHOT) await b.page.screenshot({ path: process.env.PHONE_SCREENSHOT })
+
+  // Desktop width: one row of 14, inside the felt panel.
+  await b.page.setViewportSize({ width: 1100, height: 800 })
+  const wide = await tiles.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().toJSON() as DOMRect))
+  expect(new Set(wide.map((r) => Math.round(r.top))).size).toBe(1)
+  const felt = await b.page.getByTestId('hand').evaluate((el) => el.parentElement!.getBoundingClientRect().right)
+  expect(Math.max(...wide.map((r) => r.right))).toBeLessThanOrEqual(felt)
 })
 
 test('invite link, leaving a room, and the host deleting it for everyone', async ({ users }) => {
